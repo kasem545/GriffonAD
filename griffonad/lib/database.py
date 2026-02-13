@@ -15,10 +15,12 @@ def logger(s):
         print(s)
 
 
-class Owned():
-    def __init__(self, obj, secret=None, secret_type=None, krb_auth=False, ticket_with_fqdn=False):
+class Owned:
+    def __init__(
+        self, obj, secret=None, secret_type=None, krb_auth=False, ticket_with_fqdn=False
+    ):
         self.obj = obj
-        self.krb_auth = krb_auth # means we have requested a TGT for this user (the KRB5CCNAME is set)
+        self.krb_auth = krb_auth  # means we have requested a TGT for this user (the KRB5CCNAME is set)
         self.ticket_with_fqdn = ticket_with_fqdn
         self.secret_type = secret_type
         self.secret = secret
@@ -31,58 +33,83 @@ class Owned():
         return self.obj.name
 
 
-class LDAPObject():
-    def __init__(self, o:dict, type:int):
+class LDAPObject:
+    def __init__(self, o: dict, type: int):
         # bloodhound_json should be used only in this file
         self.bloodhound_json = o
 
         self.is_admin = False
         self.can_admin = False
         self.type = type
-        self.sid = o['ObjectIdentifier'] # it's the guid for gpo
-        self.protected = False # in protected users group
-        self.group_rids = set() # list of groups this object belongs
-        self.group_sids = set() # list of groups this object belongs
-        self.gpo_links_to_ou = [] # only for GPO, it contains the ou dn 
-        self.from_domain = o['Properties']['domain']
+        self.sid = o["ObjectIdentifier"]  # it's the guid for gpo
+        self.protected = False  # in protected users group
+        self.group_rids = set()  # list of groups this object belongs
+        self.group_sids = set()  # list of groups this object belongs
+        self.gpo_links_to_ou = []  # only for GPO, it contains the ou dn
+        self.from_domain = o["Properties"]["domain"]
 
         # Arg is most of the time set to None, it's useful for right=AllowedToDelegate,
         # then arg is a list with authorized SPNs.
-        self.rights_by_sid = {} # target_sid -> dict({right1: arg, right2: arg, ...})
+        self.rights_by_sid = {}  # target_sid -> dict({right1: arg, right2: arg, ...})
         self.is_owned_domain = False
         self.is_owned_dc = False
 
-        self.lastlogon = o['Properties']['lastlogon'] if 'lastlogon' in o['Properties'] else 0
-        self.dn = o['Properties']['distinguishedname'] if 'distinguishedname' in o['Properties'] else self.sid
-        self.spn = o['Properties']['serviceprincipalnames'] if 'serviceprincipalnames' in o['Properties'] else []
-        self.np = 'dontreqpreauth' in o['Properties'] and o['Properties']['dontreqpreauth']
-        self.trustedtoauth = 'trustedtoauth' in o['Properties'] and o['Properties']['trustedtoauth']
-        self.sensitive = 'sensitive' in o['Properties'] and o['Properties']['sensitive']
-        self.admincount = 'admincount' in o['Properties'] and o['Properties']['admincount']
-        self.unconstraineddelegation = 'unconstraineddelegation' in o['Properties'] and o['Properties']['unconstraineddelegation']
-        self.passwordnotreqd = 'passwordnotreqd' in o['Properties'] and o['Properties']['passwordnotreqd']
-        self.pwdneverexpires = 'pwdneverexpires' in o['Properties'] and o['Properties']['pwdneverexpires']
-        self.description = o['Properties']['description'] if 'description' in o['Properties'] else ''
-        self.enabled = 'enabled' in o['Properties'] and o['Properties']['enabled']
+        self.lastlogon = (
+            o["Properties"]["lastlogon"] if "lastlogon" in o["Properties"] else 0
+        )
+        self.dn = (
+            o["Properties"]["distinguishedname"]
+            if "distinguishedname" in o["Properties"]
+            else self.sid
+        )
+        self.spn = (
+            o["Properties"]["serviceprincipalnames"]
+            if "serviceprincipalnames" in o["Properties"]
+            else []
+        )
+        self.np = (
+            "dontreqpreauth" in o["Properties"] and o["Properties"]["dontreqpreauth"]
+        )
+        self.trustedtoauth = (
+            "trustedtoauth" in o["Properties"] and o["Properties"]["trustedtoauth"]
+        )
+        self.sensitive = "sensitive" in o["Properties"] and o["Properties"]["sensitive"]
+        self.admincount = (
+            "admincount" in o["Properties"] and o["Properties"]["admincount"]
+        )
+        self.unconstraineddelegation = (
+            "unconstraineddelegation" in o["Properties"]
+            and o["Properties"]["unconstraineddelegation"]
+        )
+        self.passwordnotreqd = (
+            "passwordnotreqd" in o["Properties"] and o["Properties"]["passwordnotreqd"]
+        )
+        self.pwdneverexpires = (
+            "pwdneverexpires" in o["Properties"] and o["Properties"]["pwdneverexpires"]
+        )
+        self.description = (
+            o["Properties"]["description"] if "description" in o["Properties"] else ""
+        )
+        self.enabled = "enabled" in o["Properties"] and o["Properties"]["enabled"]
 
         if self.type == c.T_DOMAIN:
-            self.name = o['Properties']['name']
+            self.name = o["Properties"]["name"]
             self.rid = 0
         elif self.type == c.T_GPO:
-            self.gpo_dirname_id = '{' + self.dn.split('{')[1].split('}')[0] + '}'
-            self.name = self.gpo_dirname_id + '[' + o['Properties']['name'] + ']'
+            self.gpo_dirname_id = "{" + self.dn.split("{")[1].split("}")[0] + "}"
+            self.name = self.gpo_dirname_id + "[" + o["Properties"]["name"] + "]"
             self.rid = 0
         elif self.type == c.T_CONTAINER or self.type == c.T_OU:
             self.rid = 0
-            self.name = o['Properties']['name']
+            self.name = o["Properties"]["name"]
         else:
-            self.rid = int(self.sid.split('-')[-1])
-            if 'samaccountname' in o['Properties']:
-                self.name = o['Properties']['samaccountname']
+            self.rid = int(self.sid.split("-")[-1])
+            if "samaccountname" in o["Properties"]:
+                self.name = o["Properties"]["samaccountname"]
             else:
-                self.name = o['Properties']['name'].split('@')[0]
+                self.name = o["Properties"]["name"].split("@")[0]
 
-        self.is_krbtgt = self.name.upper() == 'KRBTGT'
+        self.is_krbtgt = self.name.upper() == "KRBTGT"
 
     def __str__(self):
         return self.name
@@ -100,8 +127,8 @@ class FakeLDAPObject(LDAPObject):
         self.protected = False
         self.sensitive = False
         self.lastlogon = 0
-        self.name = ''
-        self.dn = ''
+        self.name = ""
+        self.dn = ""
         self.np = False
         self.passwordnotreqd = False
         self.pwdneverexpires = False
@@ -116,9 +143,10 @@ class FakeLDAPObject(LDAPObject):
         self.bloodhound_json = None
         self.is_owned_domain = False
         self.is_owned_dc = False
-        self.description = ''
+        self.description = ""
         self.enabled = True
-        self.from_domain = ''
+        self.from_domain = ""
+        self.trusts = []
 
     def __str__(self):
         return self.name
@@ -127,38 +155,44 @@ class FakeLDAPObject(LDAPObject):
         return self.name
 
 
-class Database():
+class Database:
     def __init__(self):
-        self.objects_by_sid = {} # sid -> LDAPObject, or guid for gpo
-        self.groups_by_sid = {} # group_sid -> [member_sid, ...]
-        self.ous_by_dn = {} # ou_dn -> {'members': [sid, ...], 'gpo_links': [gpo_guid, ...]}
-        self.ous_dn_to_sid = {} # ou_dn -> ou_sid
-        self.main_dc = None # LDAPObject
-        self.domain = None # LDAPObject
-        self.owned_db = {} # name -> Owned
-        self.objects_by_name = {} # upper_name (or gpo_dirname_id) -> LDAPObject
-        self.sessions_by_sid = {} # user_sid -> set(computer_sid, ...)
-        self.prefixed_sids = {} # sid_without_prefix -> sid_with_prefix
+        self.objects_by_sid = {}  # sid -> LDAPObject, or guid for gpo
+        self.groups_by_sid = {}  # group_sid -> [member_sid, ...]
+        self.ous_by_dn = {}  # ou_dn -> {'members': [sid, ...], 'gpo_links': [gpo_guid, ...]}
+        self.ous_dn_to_sid = {}  # ou_dn -> ou_sid
+        self.main_dc = None  # LDAPObject
+        self.domain = None  # LDAPObject
+        self.owned_db = {}  # name -> Owned
+        self.objects_by_name = {}  # upper_name (or gpo_dirname_id) -> LDAPObject
+        self.sessions_by_sid = {}  # user_sid -> set(computer_sid, ...)
+        self.prefixed_sids = {}  # sid_without_prefix -> sid_with_prefix
+        self.domains = {}
+        self.raw_objects_by_type = {}
+        self.sessions_registry_by_sid = {}
+        self.sessions_privileged_by_sid = {}
+        self.trust_abuse_paths = []
+        self.adcs_templates = {}
+        self.adcs_cas = {}
+        self.adcs_findings = []
+        self.rodc_findings = []
 
         # All user sids (users + computers)
         # The set is simplified by prune_users to keep only interesting users.
         self.users = set()
 
-
-    def sid_to_dn(self, sid:str) -> str:
+    def sid_to_dn(self, sid: str) -> str:
         return self.objects_by_sid[sid].dn
 
-
-    def search_by_name(self, name:str) -> LDAPObject:
+    def search_by_name(self, name: str) -> LDAPObject:
         name = name.upper()
         if name in self.objects_by_name:
             return self.objects_by_name[name]
         return None
 
-
     def load_owned(self, args):
         try:
-            fd = open('owned', 'r+')
+            fd = open("owned", "r+")
         except:
             return
 
@@ -171,27 +205,46 @@ class Database():
                 exit(1)
 
             if obj.type == c.T_COMPUTER:
-                self.owned_db[obj.name.upper()] = Owned(obj,
-                    secret=get_aes_256_from_hex(self.domain.name, obj.name, line[2]),
+                domain_name = obj.from_domain if obj.from_domain else self.domain.name
+                self.owned_db[obj.name.upper()] = Owned(
+                    obj,
+                    secret=get_aes_256_from_hex(domain_name, obj.name, line[2]),
                     secret_type=c.T_SECRET_AESKEY,
-                    krb_auth=False)
+                    krb_auth=False,
+                )
             else:
-                self.owned_db[obj.name.upper()] = Owned(obj,
+                self.owned_db[obj.name.upper()] = Owned(
+                    obj,
                     secret=line[2],
                     secret_type=c.MAP_SECRET_TYPE[line[1]],
-                    krb_auth=False)
+                    krb_auth=False,
+                )
 
+    def __load_json(self, filename: str):
+        data = json.load(open(filename, "r"))
+        objects = data["data"]
+        meta_type = data["meta"]["type"]
+        self.raw_objects_by_type[meta_type] = objects
 
-    def __load_json(self, filename:str):
-        data = json.load(open(filename, 'r'))
-        objects = data['data']
-        type = c.BH_OBJECT_TYPE[data['meta']['type']]
+        if meta_type == "certtemplates":
+            self._load_cert_templates(objects)
+            return
+
+        if meta_type == "enterprisecas":
+            self._load_enterprise_cas(objects)
+            return
+
+        if meta_type not in c.BH_OBJECT_TYPE:
+            logger(f"warning: unsupported bloodhound type {meta_type}")
+            return
+
+        type = c.BH_OBJECT_TYPE[meta_type]
         for o_json in objects:
-            sid = o_json['ObjectIdentifier']
+            sid = o_json["ObjectIdentifier"]
             o = LDAPObject(o_json, type)
             # For GPOs, index by both ObjectIdentifier (RustHound/BloodHound CE) and DN GUID (old BloodHound)
             if type == c.T_GPO:
-                gpo_guid_from_dn = o.gpo_dirname_id.strip('{}').upper()
+                gpo_guid_from_dn = o.gpo_dirname_id.strip("{}").upper()
                 # Index by ObjectIdentifier (normalized to uppercase)
                 self.objects_by_sid[sid.upper()] = o
                 # Also index by DN GUID (normalized to uppercase)
@@ -202,13 +255,15 @@ class Database():
             # Example: CORP-LOCAL-S-1-5-32-555
             # save the sid translation, used with sysvol
             if sid.startswith(o.from_domain):
-                self.prefixed_sids[sid.replace(o.from_domain + '-', '')] = sid
+                self.prefixed_sids[sid.replace(o.from_domain + "-", "")] = sid
             if type == c.T_GPO:
                 self.objects_by_name[o.gpo_dirname_id] = o
             else:
                 self.objects_by_name[o.name.upper()] = o
-            if type == c.T_COMPUTER and 'OU=DOMAIN CONTROLLERS' in \
-                     o_json['Properties']['distinguishedname']:
+            if (
+                type == c.T_COMPUTER
+                and "OU=DOMAIN CONTROLLERS" in o_json["Properties"]["distinguishedname"]
+            ):
                 o.type = c.T_DC
                 self.users.add(sid)
                 if self.main_dc is None:
@@ -216,39 +271,88 @@ class Database():
                 elif o.rid < self.main_dc.rid:
                     self.main_dc = o
             elif type == c.T_DOMAIN:
-                # TODO: actually support for only one domain
-                self.domain = self.objects_by_sid[sid]
+                dom = self.objects_by_sid[sid]
+                self.domains[dom.sid] = dom
+                if self.domain is None:
+                    self.domain = dom
             elif type == c.T_USER or type == c.T_COMPUTER:
                 self.users.add(sid)
             if type == c.T_COMPUTER:
                 self.save_sessions(o_json)
 
+    def _normalize_properties(self, o_json):
+        props = o_json.get("Properties", {})
+        ret = {}
+        for k, v in props.items():
+            ret[k.lower()] = v
+        return ret
+
+    def _load_cert_templates(self, objects):
+        for o_json in objects:
+            sid = o_json.get("ObjectIdentifier", "")
+            props = self._normalize_properties(o_json)
+            name = props.get("name", sid)
+            self.adcs_templates[sid] = {
+                "sid": sid,
+                "name": name,
+                "domain": props.get("domain", ""),
+                "enrollee_supplies_subject": props.get(
+                    "enrolleesuppliessubject", False
+                ),
+                "client_auth": props.get("clientauthentication", False),
+                "any_purpose": props.get("anypurpose", False),
+                "enrollment_agent": props.get("enrollmentagent", False),
+                "manager_approval": props.get("requiresmanagerapproval", False),
+                "authorized_signatures": props.get("authorizedsignatures", 0),
+                "enabled": props.get("enabled", True),
+                "aces": o_json.get("Aces", []),
+            }
+
+    def _load_enterprise_cas(self, objects):
+        for o_json in objects:
+            sid = o_json.get("ObjectIdentifier", "")
+            props = self._normalize_properties(o_json)
+            name = props.get("name", sid)
+            self.adcs_cas[sid] = {
+                "sid": sid,
+                "name": name,
+                "domain": props.get("domain", ""),
+                "dns_name": props.get("dnshostname", ""),
+                "web_enrollment": props.get("webenrollment", False),
+                "enforce_encryption_icertrequest": props.get(
+                    "enforceencryptionforicertrequest", True
+                ),
+            }
+
+    def _add_session(self, sessions_map, user_sid, computer_sid):
+        if user_sid not in sessions_map:
+            sessions_map[user_sid] = set()
+        sessions_map[user_sid].add(computer_sid)
 
     def save_sessions(self, o_json):
         # Collector 'Session'
-        for sess in o_json['Sessions']['Results']:
-            user_sid = sess['UserSID']
-            user_sid = sess['ComputerSID']
-            if sess['UserSID'] not in self.sessions_by_sid:
-                self.sessions_by_sid[sess['UserSID']] = set()
-            self.sessions_by_sid[sess['UserSID']].add(sess['ComputerSID'])
+        for sess in o_json["Sessions"]["Results"]:
+            self._add_session(
+                self.sessions_by_sid, sess["UserSID"], sess["ComputerSID"]
+            )
 
         # Collector 'LoggedOn'
-        for sess in o_json['RegistrySessions']['Results']:
-            user_sid = sess['UserSID']
-            user_sid = sess['ComputerSID']
-            if sess['UserSID'] not in self.sessions_by_sid:
-                self.sessions_by_sid[sess['UserSID']] = set()
-            self.sessions_by_sid[sess['UserSID']].add(sess['ComputerSID'])
+        for sess in o_json["RegistrySessions"]["Results"]:
+            self._add_session(
+                self.sessions_registry_by_sid, sess["UserSID"], sess["ComputerSID"]
+            )
+            self._add_session(
+                self.sessions_by_sid, sess["UserSID"], sess["ComputerSID"]
+            )
 
         # Collector 'PrivilegedSessions'
-        for sess in o_json['RegistrySessions']['Results']:
-            user_sid = sess['UserSID']
-            user_sid = sess['ComputerSID']
-            if sess['UserSID'] not in self.sessions_by_sid:
-                self.sessions_by_sid[sess['UserSID']] = set()
-            self.sessions_by_sid[sess['UserSID']].add(sess['ComputerSID'])
-
+        for sess in o_json["PrivilegedSessions"]["Results"]:
+            self._add_session(
+                self.sessions_privileged_by_sid, sess["UserSID"], sess["ComputerSID"]
+            )
+            self._add_session(
+                self.sessions_by_sid, sess["UserSID"], sess["ComputerSID"]
+            )
 
     def load_objects(self, args):
         t = time.time()
@@ -257,53 +361,78 @@ class Database():
             self.__load_json(fn)
 
         diff = time.time() - t
-        if diff > .4:
-            print(f'[+] json loaded in {diff} seconds')
+        if diff > 0.4:
+            print(f"[+] json loaded in {diff} seconds")
 
         if self.domain is None:
             self.domain = FakeLDAPObject()
-            self.domain.name = 'UNKNOWN_DOMAIN'
-            self.domain.dn = 'UNKNOWN_DOMAIN_DN'
+            self.domain.name = "UNKNOWN_DOMAIN"
+            self.domain.dn = "UNKNOWN_DOMAIN_DN"
             self.type = c.T_DOMAIN
 
+        if not self.domains:
+            self.domains[self.domain.sid] = self.domain
 
     def set_has_sessions(self):
+        def ensure_object(o_sid, type):
+            if o_sid not in self.objects_by_sid:
+                obj = FakeLDAPObject()
+                obj.sid = o_sid
+                obj.name = o_sid
+                obj.type = type
+                self.users.add(obj.sid)
+                self.objects_by_sid[o_sid] = obj
+                self.objects_by_name[o_sid] = obj
+            return self.objects_by_sid[o_sid]
+
         for user_sid, targets_sid in self.sessions_by_sid.items():
             if user_sid not in self.objects_by_sid:
-                user_object = FakeLDAPObject()
-                user_object.sid = user_sid
-                user_object.name = user_sid
-                user_object.type = c.T_USER
-                self.users.add(user_object.sid)
-                self.objects_by_sid[user_sid] = user_object
-                self.objects_by_name[user_sid] = user_object
+                user_object = ensure_object(user_sid, c.T_USER)
             else:
                 user_object = self.objects_by_sid[user_sid]
 
             for computer_sid in targets_sid:
-                user_object.rights_by_sid[computer_sid] = {'HasSession': None}
+                if computer_sid not in user_object.rights_by_sid:
+                    user_object.rights_by_sid[computer_sid] = {}
+                user_object.rights_by_sid[computer_sid]["HasSession"] = {
+                    "quality": "normal"
+                }
 
                 if computer_sid not in self.objects_by_sid:
-                    computer_object = FakeLDAPObject()
-                    computer_object.sid = computer_sid
-                    computer_object.name = computer_sid
-                    computer_object.type = c.T_USER
-                    self.users.add(computer_object.sid)
-                    self.objects_by_sid[computer_sid] = computer_object
-                    self.objects_by_name[computer_sid] = computer_object
+                    computer_object = ensure_object(computer_sid, c.T_COMPUTER)
                 else:
                     computer_object = self.objects_by_sid[computer_sid]
-                    computer_object.rights_by_sid[user_sid] = {'SessionForUser': None}
 
+                if user_sid not in computer_object.rights_by_sid:
+                    computer_object.rights_by_sid[user_sid] = {}
+                computer_object.rights_by_sid[user_sid]["SessionForUser"] = {
+                    "quality": "normal"
+                }
+
+        for user_sid, targets_sid in self.sessions_privileged_by_sid.items():
+            user_object = ensure_object(user_sid, c.T_USER)
+            for computer_sid in targets_sid:
+                if computer_sid not in user_object.rights_by_sid:
+                    user_object.rights_by_sid[computer_sid] = {}
+                user_object.rights_by_sid[computer_sid]["HasPrivSession"] = {
+                    "quality": "high"
+                }
+
+                computer_object = ensure_object(computer_sid, c.T_COMPUTER)
+                if user_sid not in computer_object.rights_by_sid:
+                    computer_object.rights_by_sid[user_sid] = {}
+                computer_object.rights_by_sid[user_sid]["PrivSessionForUser"] = {
+                    "quality": "high"
+                }
 
     def populate_groups(self):
-        def __add(group_sid:str, members:set, o:LDAPObject):
+        def __add(group_sid: str, members: set, o: LDAPObject):
             if o.type in [c.T_USER, c.T_COMPUTER, c.T_DC]:
-                o.group_rids.add(int(group_sid.split('-')[-1]))
+                o.group_rids.add(int(group_sid.split("-")[-1]))
                 o.group_sids.add(group_sid)
             elif o.type == c.T_GROUP:
-                for member in o.bloodhound_json['Members']:
-                    sid = member['ObjectIdentifier']
+                for member in o.bloodhound_json["Members"]:
+                    sid = member["ObjectIdentifier"]
                     if sid in members:
                         continue
                     if sid not in self.objects_by_sid:
@@ -319,12 +448,11 @@ class Database():
                 __add(sid, members, o)
 
         # Set the flag protected
-        sid = f'{self.domain.sid}-525' # Protected Users
+        sid = f"{self.domain.sid}-525"  # Protected Users
         if sid in self.groups_by_sid:
             self.protected_users = self.groups_by_sid[sid]
             for p_sid in self.protected_users:
                 self.objects_by_sid[p_sid].protected = True
-
 
     def populate_ous(self):
         # Note: this is not a sid for GPO but Bloodhound set the gpo id in
@@ -335,30 +463,217 @@ class Database():
             # also check for domains, some gpos may be linked
             if o.type == c.T_OU or o.type == c.T_DOMAIN:
                 self.ous_dn_to_sid[o.dn] = sid
-                self.ous_by_dn[o.dn] = {'members': [], 'gpo_links': []}
-                for lk in o.bloodhound_json['Links']:
-                    gpo_guid = lk['GUID'].upper()
-                    self.ous_by_dn[o.dn]['gpo_links'].append(gpo_guid)
+                self.ous_by_dn[o.dn] = {"members": [], "gpo_links": []}
+                for lk in o.bloodhound_json["Links"]:
+                    gpo_guid = lk["GUID"].upper()
+                    self.ous_by_dn[o.dn]["gpo_links"].append(gpo_guid)
                     if gpo_guid in self.objects_by_sid:
                         self.objects_by_sid[gpo_guid].gpo_links_to_ou.append(o.dn)
                         # Not every efficient, bu we expect the list is not too long
                         self.objects_by_sid[gpo_guid].gpo_links_to_ou.sort()
                     else:
-                        logger(f'warning: GPO {gpo_guid} linked from {o.dn} not found in collected data')
+                        logger(
+                            f"warning: GPO {gpo_guid} linked from {o.dn} not found in collected data"
+                        )
 
         # Populate OU members
         for sid, o in self.objects_by_sid.items():
             # Not sure if all these types can be in an OU
             if o.type in [c.T_GROUP, c.T_USER, c.T_COMPUTER, c.T_DC]:
-                i = o.dn.find(',')
+                i = o.dn.find(",")
                 # Keep only the OU part, example:
                 # if we have CN=MYUSER,OU=MYOU,DC=CORP,DC=LOCAL
                 # the result is OU=MYOU,DC=CORP,DC=LOCAL
                 if i != -1:
-                    ou_dn = o.dn[i+1:]
-                    if ou_dn.startswith('OU=') and ou_dn in self.ous_by_dn:
-                        self.ous_by_dn[ou_dn]['members'].append(o.sid)
+                    ou_dn = o.dn[i + 1 :]
+                    if ou_dn.startswith("OU=") and ou_dn in self.ous_by_dn:
+                        self.ous_by_dn[ou_dn]["members"].append(o.sid)
 
+    def set_trusts(self):
+        def __to_sid(raw_sid):
+            if raw_sid in self.objects_by_sid:
+                return raw_sid
+            if raw_sid in self.prefixed_sids:
+                return self.prefixed_sids[raw_sid]
+            return None
+
+        def __direction_to_text(direction):
+            return {
+                0: "Disabled",
+                1: "Inbound",
+                2: "Outbound",
+                3: "Bidirectional",
+            }.get(direction, f"Unknown({direction})")
+
+        for domain in list(self.objects_by_sid.values()):
+            if isinstance(domain, FakeLDAPObject) or domain.type != c.T_DOMAIN:
+                continue
+
+            trusts = domain.bloodhound_json.get("Trusts", [])
+            domain.trusts = []
+
+            for trust in trusts:
+                target_sid = trust.get("TargetDomainSid", "")
+                target_sid = __to_sid(target_sid)
+                target_name = trust.get("TargetDomainName", "UNKNOWN_TRUST_DOMAIN")
+
+                if target_sid is None:
+                    fake = FakeLDAPObject()
+                    fake.type = c.T_DOMAIN
+                    fake.sid = trust.get(
+                        "TargetDomainSid", f"UNKNOWN_TRUST_SID_{target_name}"
+                    )
+                    fake.name = target_name
+                    fake.dn = target_name
+                    fake.from_domain = target_name
+                    target_sid = fake.sid
+                    self.objects_by_sid[target_sid] = fake
+                    self.objects_by_name[fake.name.upper()] = fake
+
+                target_domain = self.objects_by_sid[target_sid]
+
+                trust_data = {
+                    "sid": target_sid,
+                    "name": target_domain.name,
+                    "type": trust.get("TrustType", "Unknown"),
+                    "direction": trust.get("TrustDirection", -1),
+                    "direction_name": __direction_to_text(
+                        trust.get("TrustDirection", -1)
+                    ),
+                    "is_transitive": trust.get("IsTransitive", False),
+                    "sid_filtering_enabled": trust.get("SidFilteringEnabled", None),
+                    "trust_attributes": trust.get("TrustAttributes", []),
+                }
+
+                trust_data["abuse_paths"] = []
+                if trust_data["direction"] in [2, 3]:
+                    trust_data["abuse_paths"].append("outbound-auth")
+                if trust_data["is_transitive"]:
+                    trust_data["abuse_paths"].append("transitive-hop")
+                if trust_data["sid_filtering_enabled"] is False:
+                    trust_data["abuse_paths"].append("sid-history")
+                if trust_data["type"] in [2, "2", "Forest"]:
+                    trust_data["abuse_paths"].append("forest-trust")
+                if trust_data["type"] in [3, "3", "External"]:
+                    trust_data["abuse_paths"].append("external-trust")
+
+                domain.trusts.append(trust_data)
+
+                if target_sid not in domain.rights_by_sid:
+                    domain.rights_by_sid[target_sid] = {}
+                domain.rights_by_sid[target_sid]["TrustedDomain"] = trust_data
+
+                source_admin_sids = [
+                    f"{domain.sid}-512",
+                    f"{domain.sid}-519",
+                    f"{domain.name}-S-1-5-32-544",
+                ]
+                for admin_sid in source_admin_sids:
+                    if admin_sid not in self.objects_by_sid:
+                        continue
+                    src_obj = self.objects_by_sid[admin_sid]
+                    if target_sid not in src_obj.rights_by_sid:
+                        src_obj.rights_by_sid[target_sid] = {}
+                    src_obj.rights_by_sid[target_sid]["TrustedDomainPivot"] = trust_data
+                    self.trust_abuse_paths.append((src_obj.sid, target_sid, trust_data))
+
+    def set_adcs(self):
+        def __domain_sid_by_name(name):
+            for dom in self.domains.values():
+                if dom.name.upper() == name.upper():
+                    return dom.sid
+            return self.domain.sid
+
+        for tpl in self.adcs_templates.values():
+            if not tpl["enabled"]:
+                continue
+
+            findings = []
+            if (
+                tpl["enrollee_supplies_subject"]
+                and tpl["client_auth"]
+                and not tpl["manager_approval"]
+                and int(tpl["authorized_signatures"]) == 0
+            ):
+                findings.append("ESC1")
+            if tpl["any_purpose"]:
+                findings.append("ESC2")
+            if tpl["enrollment_agent"]:
+                findings.append("ESC3")
+
+            dangerous_write = set(["GenericAll", "WriteDacl", "WriteOwner", "Owns"])
+            enroll_rights = set(["Enroll", "AllExtendedRights"])
+
+            domain_sid = __domain_sid_by_name(tpl["domain"])
+
+            for ace in tpl["aces"]:
+                principal_sid = ace.get("PrincipalSID", "")
+                right_name = ace.get("RightName", "")
+
+                if principal_sid not in self.objects_by_sid:
+                    continue
+
+                principal = self.objects_by_sid[principal_sid]
+                if domain_sid not in principal.rights_by_sid:
+                    principal.rights_by_sid[domain_sid] = {}
+
+                if findings and right_name in enroll_rights:
+                    for esc in findings:
+                        principal.rights_by_sid[domain_sid][f"ADCS_{esc}"] = {
+                            "template": tpl["name"]
+                        }
+                        self.adcs_findings.append(
+                            {
+                                "principal": principal.name,
+                                "principal_sid": principal.sid,
+                                "domain_sid": domain_sid,
+                                "template": tpl["name"],
+                                "type": esc,
+                                "right": right_name,
+                            }
+                        )
+
+                if right_name in dangerous_write:
+                    principal.rights_by_sid[domain_sid]["ADCS_ESC4"] = {
+                        "template": tpl["name"]
+                    }
+                    self.adcs_findings.append(
+                        {
+                            "principal": principal.name,
+                            "principal_sid": principal.sid,
+                            "domain_sid": domain_sid,
+                            "template": tpl["name"],
+                            "type": "ESC4",
+                            "right": right_name,
+                        }
+                    )
+
+    def set_rodc(self):
+        self.rodc_findings = []
+        for o in self.objects_by_sid.values():
+            if isinstance(o, FakeLDAPObject) or o.type != c.T_DOMAIN:
+                continue
+
+            props = self._normalize_properties(o.bloodhound_json)
+            reveal = props.get("msds-revealondemandgroup", [])
+            never_reveal = props.get("msds-neverrevealgroup", [])
+
+            if reveal:
+                self.rodc_findings.append(
+                    {
+                        "domain": o.name,
+                        "kind": "RevealOnDemandGroup",
+                        "entries": reveal,
+                    }
+                )
+            if never_reveal:
+                self.rodc_findings.append(
+                    {
+                        "domain": o.name,
+                        "kind": "NeverRevealGroup",
+                        "entries": never_reveal,
+                    }
+                )
 
     def propagate_aces(self):
         def __set_or_add(rights, sid, right):
@@ -367,67 +682,97 @@ class Database():
             else:
                 rights[sid] = {right: None}
 
-        def __add(parent:LDAPObject, target_sid:str, right:str):
+        def __add(parent: LDAPObject, target_sid: str, right: str):
             if target_sid in self.objects_by_sid:
                 target = self.objects_by_sid[target_sid]
 
                 # Only keep rights to domain
                 if target.type == c.T_DOMAIN:
-                    if not parent.is_owned_domain and right in ['GenericAll',
-                                'WriteDacl', 'WriteOwner', 'Owns', 'AllExtendedRights']:
+                    if not parent.is_owned_domain and right in [
+                        "GenericAll",
+                        "WriteDacl",
+                        "WriteOwner",
+                        "Owns",
+                        "AllExtendedRights",
+                    ]:
                         parent.is_owned_domain = True
                         parent.rights_by_sid.clear()
                     __set_or_add(parent.rights_by_sid, target.sid, right)
-                    if 'GenericAll' in parent.rights_by_sid[target.sid]:
-                        parent.rights_by_sid[target_sid] = {'GenericAll': None}
-                    elif 'AllExtendedRights' in parent.rights_by_sid[target.sid]:
-                        parent.rights_by_sid[target_sid] = {'AllExtendedRights': None}
+                    if "GenericAll" in parent.rights_by_sid[target.sid]:
+                        parent.rights_by_sid[target_sid] = {"GenericAll": None}
+                    elif "AllExtendedRights" in parent.rights_by_sid[target.sid]:
+                        parent.rights_by_sid[target_sid] = {"AllExtendedRights": None}
                     return
 
                 # Else only keep rights to dc
                 if target.type == c.T_DC and not parent.is_owned_domain:
-                    if not parent.is_owned_dc and right in ['GenericAll',
-                                'WriteDacl', 'WriteOwner', 'Owns']:
+                    if not parent.is_owned_dc and right in [
+                        "GenericAll",
+                        "WriteDacl",
+                        "WriteOwner",
+                        "Owns",
+                    ]:
                         parent.is_owned_dc = True
                         parent.rights_by_sid.clear()
                     __set_or_add(parent.rights_by_sid, target.sid, right)
-                    if 'GenericAll' in parent.rights_by_sid[target.sid]:
-                        parent.rights_by_sid[target_sid] = {'GenericAll': None}
+                    if "GenericAll" in parent.rights_by_sid[target.sid]:
+                        parent.rights_by_sid[target_sid] = {"GenericAll": None}
                     return
 
             if not parent.is_owned_domain and not parent.is_owned_dc:
                 __set_or_add(parent.rights_by_sid, target_sid, right)
-                if target_sid != 'many' and 'GenericAll' in parent.rights_by_sid[target_sid]:
-                    parent.rights_by_sid[target_sid] = {'GenericAll': None}
+                if (
+                    target_sid != "many"
+                    and "GenericAll" in parent.rights_by_sid[target_sid]
+                ):
+                    parent.rights_by_sid[target_sid] = {"GenericAll": None}
 
         # Simplify special groups with many ACLs
         # These groups will have a target sid set to 'many'
         # If the target is the DC, the right is kept
-        exclude = [
-            f'{self.domain.name}-S-1-5-32-548', # Account operators
-            f'{self.domain.sid}-527', # Enterprise key admins
-            f'{self.domain.sid}-526', # Key admins
-        ]
+        exclude = []
+        for dom in self.domains.values():
+            exclude += [
+                f"{dom.name}-S-1-5-32-548",
+                f"{dom.sid}-527",
+                f"{dom.sid}-526",
+            ]
 
-        # Backup operators
-        # Just add the SeBackupPrivilege to simplify
-        sid = f'{self.domain.name}-S-1-5-32-551'
-        if sid in self.objects_by_sid:
-            self.objects_by_sid[sid].\
-                rights_by_sid['many'] = {
-                    'SeBackupPrivilege': None,
-                    # 'SeRestorePrivilege': None,
+            sid = f"{dom.name}-S-1-5-32-551"
+            if sid in self.objects_by_sid:
+                self.objects_by_sid[sid].rights_by_sid["many"] = {
+                    "SeBackupPrivilege": None,
                 }
 
-        # Remote desktop users
-        sid = f'{self.domain.name}-S-1-5-32-555'
-        if sid in self.objects_by_sid:
-            self.objects_by_sid[sid].rights_by_sid['many'] = {'CanRDP_on_DC': None}
+            sid = f"{dom.name}-S-1-5-32-555"
+            if sid in self.objects_by_sid:
+                self.objects_by_sid[sid].rights_by_sid["many"] = {"CanRDP_on_DC": None}
 
-        # Remote Management Users
-        sid = f'{self.domain.name}-S-1-5-32-580'
-        if sid in self.objects_by_sid:
-            self.objects_by_sid[sid].rights_by_sid['many'] = {'CanPSRemote_on_DC': None}
+            sid = f"{dom.name}-S-1-5-32-580"
+            if sid in self.objects_by_sid:
+                self.objects_by_sid[sid].rights_by_sid["many"] = {
+                    "CanPSRemote_on_DC": None
+                }
+
+            main_dc = None
+            for o in self.objects_by_sid.values():
+                if o.type == c.T_DC and o.from_domain.upper() == dom.name.upper():
+                    if main_dc is None or o.rid < main_dc.rid:
+                        main_dc = o
+
+            sid = f"{dom.name}-S-1-5-32-549"
+            if sid in self.objects_by_sid and main_dc is not None:
+                self.objects_by_sid[sid].rights_by_sid[main_dc.sid] = {"AdminTo": None}
+
+            sid = f"{dom.name}-S-1-5-32-550"
+            if sid in self.objects_by_sid and main_dc is not None:
+                self.objects_by_sid[sid].rights_by_sid[main_dc.sid] = {"AdminTo": None}
+
+            dns_admins = self.search_by_name(f"DNSADMINS@{dom.name}")
+            if dns_admins is None:
+                dns_admins = self.search_by_name("DNSADMINS")
+            if dns_admins is not None and main_dc is not None:
+                dns_admins.rights_by_sid[main_dc.sid] = {"AdminTo": None}
 
         # Propagate previous rights and some added with gpo (sysvol parsing)
         for group_sid, members in self.groups_by_sid.items():
@@ -456,11 +801,11 @@ class Database():
                 continue
 
             # Propagate bloodhound ACEs
-            for ace in target.bloodhound_json['Aces']:
-                parent_sid = ace['PrincipalSID']
+            for ace in target.bloodhound_json["Aces"]:
+                parent_sid = ace["PrincipalSID"]
 
                 if parent_sid not in self.objects_by_sid:
-                    logger(f'warning: unknown sid {parent_sid}')
+                    logger(f"warning: unknown sid {parent_sid}")
                     continue
 
                 # Check if the target is the DC -> keep the rights, otherwise
@@ -468,18 +813,21 @@ class Database():
                 # FIXME: not sure about this: for the Key Admins group,
                 # does it have always a AddKeyCredentialLink on the DC?
                 if parent_sid in exclude and target.type != c.T_DC:
-                    target_sid = 'many'
+                    target_sid = "many"
                 else:
                     target_sid = target.sid
 
                 parent = self.objects_by_sid[parent_sid]
-                __add(parent, target_sid, ace['RightName'])
+                __add(parent, target_sid, ace["RightName"])
 
                 # Groups are already propagated, so don't need to recurse on members
                 if parent.type == c.T_GROUP:
                     for member_sid in self.groups_by_sid[parent.sid]:
-                        __add(self.objects_by_sid[member_sid], target_sid, ace['RightName'])
-
+                        __add(
+                            self.objects_by_sid[member_sid],
+                            target_sid,
+                            ace["RightName"],
+                        )
 
     def set_delegations(self):
         # Don't use iter_users, the list could be long!
@@ -493,73 +841,75 @@ class Database():
             # RBCD
             # AllowedToAct is the attribute msDS-AllowedToActOnBehalfOfOtherIdentity
             # !!! The relation is reversed in rights_by_sid
-            if 'AllowedToAct' in o.bloodhound_json:
-                for delegate_from in o.bloodhound_json['AllowedToAct']:
-                    from_sid = delegate_from['ObjectIdentifier']
+            if "AllowedToAct" in o.bloodhound_json:
+                for delegate_from in o.bloodhound_json["AllowedToAct"]:
+                    from_sid = delegate_from["ObjectIdentifier"]
 
                     # If 'o' has object sids in the list, it means that these sids
                     # can ask a TGS to 'o' and 'o' can impersonate any users
                     if from_sid not in self.objects_by_sid:
-                        print(f'warning: {o} can AllowedToActOnBehalf {from_sid} but this SID is unknown')
+                        print(
+                            f"warning: {o} can AllowedToActOnBehalf {from_sid} but this SID is unknown"
+                        )
                         continue
                     from_obj = self.objects_by_sid[from_sid]
                     if o.sid not in from_obj.rights_by_sid:
-                        from_obj.rights_by_sid[o.sid] = {'AllowedToAct': None}
+                        from_obj.rights_by_sid[o.sid] = {"AllowedToAct": None}
                     else:
-                        from_obj.rights_by_sid[o.sid]['AllowedToAct'] = None
+                        from_obj.rights_by_sid[o.sid]["AllowedToAct"] = None
 
             # Unconstrained delegation
             if o.unconstraineddelegation:
-                o.rights_by_sid['many'] = {'AllowedToDelegate': None}
+                o.rights_by_sid["many"] = {"AllowedToDelegate": None}
 
             # Constrained delegation
-            elif 'allowedtodelegate' in o.bloodhound_json['Properties']:
-                for spn in o.bloodhound_json['Properties']['allowedtodelegate']:
-                    spn_split = spn.split('/')
+            elif "allowedtodelegate" in o.bloodhound_json["Properties"]:
+                for spn in o.bloodhound_json["Properties"]["allowedtodelegate"]:
+                    spn_split = spn.split("/")
 
-                    dom = f'.{self.domain.name}'
-                    name = spn_split[1].upper().replace(dom, '')
+                    dom = (
+                        f".{o.from_domain}" if o.from_domain else f".{self.domain.name}"
+                    )
+                    name = spn_split[1].upper().replace(dom, "")
 
                     target = self.search_by_name(name)
                     if target is None:
-                        target = self.search_by_name(name + '$')
+                        target = self.search_by_name(name + "$")
                         if target is None:
-                            logger(f'spn not found {spn}')
+                            logger(f"spn not found {spn}")
                             continue
 
                     if target.sid in o.rights_by_sid:
-                        if 'AllowedToDelegate' in o.rights_by_sid[target.sid]:
-                            o.rights_by_sid[target.sid]['AllowedToDelegate'].append(spn)
+                        if "AllowedToDelegate" in o.rights_by_sid[target.sid]:
+                            o.rights_by_sid[target.sid]["AllowedToDelegate"].append(spn)
                         else:
-                            o.rights_by_sid[target.sid]['AllowedToDelegate'] = [spn]
+                            o.rights_by_sid[target.sid]["AllowedToDelegate"] = [spn]
                     else:
-                        o.rights_by_sid[target.sid] = {'AllowedToDelegate': [spn]}
-
+                        o.rights_by_sid[target.sid] = {"AllowedToDelegate": [spn]}
 
     def merge_rights(self):
         for o in self.objects_by_sid.values():
             for rights in o.rights_by_sid.values():
-                if 'GetChanges' in rights:
+                if "GetChanges" in rights:
                     found_one = False
-                    if 'GetChangesInFilteredSet' in rights:
-                        del rights['GetChangesInFilteredSet']
-                        rights['GetChanges_GetChangesInFilteredSet'] = None
+                    if "GetChangesInFilteredSet" in rights:
+                        del rights["GetChangesInFilteredSet"]
+                        rights["GetChanges_GetChangesInFilteredSet"] = None
                         found_one = True
-                    if 'GetChangesAll' in rights:
-                        del rights['GetChangesAll']
-                        rights['GetChanges_GetChangesAll'] = None
+                    if "GetChangesAll" in rights:
+                        del rights["GetChangesAll"]
+                        rights["GetChanges_GetChangesAll"] = None
                         found_one = True
                     if found_one:
-                        del rights['GetChanges']
+                        del rights["GetChanges"]
 
-                if 'SeBackupPrivilege_RDP_required' in rights and 'CanRDP' in rights:
-                    rights['CanRDP+SeBackupPrivilege'] = None
-                    del rights['SeBackupPrivilege_RDP_required']
-
+                if "SeBackupPrivilege_RDP_required" in rights and "CanRDP" in rights:
+                    rights["CanRDP+SeBackupPrivilege"] = None
+                    del rights["SeBackupPrivilege_RDP_required"]
 
     def propagate_admin_groups(self):
         # propagate to children
-        def __propagate(o:LDAPObject):
+        def __propagate(o: LDAPObject):
             if o.is_admin:
                 return
             o.is_admin = True
@@ -568,19 +918,19 @@ class Database():
                 for sid in self.groups_by_sid[o.sid]:
                     __propagate(self.objects_by_sid[sid])
 
-        admins = [
-            f'{self.domain.sid}',          # domain
-            f'{self.domain.sid}-512',      # Domain Admins
-            f'{self.domain.sid}-502',      # krbtgt
-            f'{self.domain.sid}-519',      # Enterprise Admins
-            f'{self.domain.name}-S-1-5-32-544', # Administrators
-        ]
+        for dom in self.domains.values():
+            admins = [
+                f"{dom.sid}",
+                f"{dom.sid}-512",
+                f"{dom.sid}-502",
+                f"{dom.sid}-519",
+                f"{dom.name}-S-1-5-32-544",
+            ]
 
-        for sid in admins:
-            if sid not in self.objects_by_sid:
-                continue
-            __propagate(self.objects_by_sid[sid])
-
+            for sid in admins:
+                if sid not in self.objects_by_sid:
+                    continue
+                __propagate(self.objects_by_sid[sid])
 
     def reverse_relations(self):
         self.reversed_relations = {}
@@ -590,7 +940,6 @@ class Database():
                     self.reversed_relations[target_sid] = {parent_sid}
                 else:
                     self.reversed_relations[target_sid].add(parent_sid)
-
 
     # Normally it's fastest after the call of prune_users
     # We should not have a lot of interesting users
@@ -604,8 +953,7 @@ class Database():
         for name in sorted(list(names.keys())):
             yield names[name]
 
-
-    def propagate_can_admin(self, ml:MiniLanguage):
+    def propagate_can_admin(self, ml: MiniLanguage):
         def __propagate_to_parent(o):
             if o.can_admin:
                 return
@@ -619,7 +967,7 @@ class Database():
                     __propagate_to_parent(parent)
 
         # Propagate backup operators
-        sid = f'{self.domain.name}-S-1-5-32-551'
+        sid = f"{self.domain.name}-S-1-5-32-551"
         if sid in self.objects_by_sid:
             self.objects_by_sid[sid].can_admin = True
             for member_sid in self.groups_by_sid[sid]:
@@ -630,7 +978,6 @@ class Database():
             if o.is_admin or o.unconstraineddelegation:
                 __propagate_to_parent(o)
 
-
     # If a user has the flags is_admin or can_admin then we keep only rights
     # to admin or can_admin users
     def reduce_aces(self):
@@ -639,12 +986,11 @@ class Database():
             if not (o.is_admin or o.can_admin):
                 continue
             for target_sid in list(o.rights_by_sid):
-                if target_sid == 'many':
+                if target_sid == "many":
                     continue
                 target = self.objects_by_sid[target_sid]
                 if not (target.is_admin or target.can_admin):
                     del o.rights_by_sid[target_sid]
-
 
     def prune_users(self):
         to_remove = []
@@ -654,8 +1000,14 @@ class Database():
             o = self.objects_by_sid[sid]
             if not o.enabled:
                 to_remove.append(o.sid)
-            elif not (o.rights_by_sid or o.np or (o.spn and o.type == c.T_USER) or \
-                    o.is_admin or o.trustedtoauth or o.passwordnotreqd):
+            elif not (
+                o.rights_by_sid
+                or o.np
+                or (o.spn and o.type == c.T_USER)
+                or o.is_admin
+                or o.trustedtoauth
+                or o.passwordnotreqd
+            ):
                 to_remove.append(o.sid)
         for sid in to_remove:
             self.users.remove(sid)

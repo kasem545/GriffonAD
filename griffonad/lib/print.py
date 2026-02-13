@@ -366,13 +366,13 @@ def print_hvt(args, db: Database):
             print_user(o)
 
     if pivots:
-        print(_color_tag(f"Paths-to-admin ({len(pivots)})", Fore.YELLOW))
+        print(_color_tag(f"\nPaths-to-admin ({len(pivots)})", Fore.YELLOW))
         print()
         for o in pivots:
             print_user(o)
 
     if others:
-        print(_color_tag(f"Other ({len(others)})", Fore.CYAN))
+        print(_color_tag(f"\nOther ({len(others)})", Fore.CYAN))
         print()
         for o in others:
             print_user(o)

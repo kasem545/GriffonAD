@@ -164,11 +164,11 @@ def _wrap_items(
 
 def _sev_label(sev: str) -> str:
     if sev == "critical":
-        return _color_tag("CRIT", Fore.RED)
+        return _color_tag("CRITICAL", Fore.RED)
     if sev == "high":
         return _color_tag("HIGH", Fore.YELLOW)
     if sev == "medium":
-        return _color_tag("MED", Fore.GREEN)
+        return _color_tag("MEDIUM", Fore.GREEN)
     return _color_tag("LOW", Fore.CYAN)
 
 

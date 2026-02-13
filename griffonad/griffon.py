@@ -204,6 +204,16 @@ def _main():
     parser.add_argument("--sysvol", metavar="PATH", type=str, help="Analyze GPOs")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--sid", action="store_true", help="Show object SIDs")
+    parser.add_argument(
+        "--full-groups",
+        action="store_true",
+        help="In HVT view, print all group memberships",
+    )
+    parser.add_argument(
+        "--full-rights",
+        action="store_true",
+        help="In HVT view, print all rights (no truncation)",
+    )
 
     arg_paths = parser.add_argument_group("Paths")
     arg_paths.add_argument("--fromo", action="store_true", help="Paths from owned")

@@ -2,6 +2,8 @@ import os
 import binascii
 import time
 import re
+import shutil
+import textwrap
 from colorama import Back, Fore, Style
 from jinja2 import Template, Environment, FileSystemLoader
 
@@ -137,6 +139,39 @@ def _color_tag(text: str, color: str) -> str:
     return f"{color}{text}{Style.RESET_ALL}"
 
 
+def _term_width() -> int:
+    try:
+        return shutil.get_terminal_size((120, 20)).columns
+    except Exception:
+        return 120
+
+
+def _wrap_items(
+    prefix: str, items: list[str], indent: int = 4, width: int | None = None
+):
+    if width is None:
+        width = _term_width()
+    if not items:
+        return
+    body = ", ".join(items)
+    initial = " " * indent + prefix
+    subsequent = " " * (indent + len(prefix))
+    for line in textwrap.wrap(
+        body, width=width, initial_indent=initial, subsequent_indent=subsequent
+    ):
+        print(line)
+
+
+def _sev_label(sev: str) -> str:
+    if sev == "critical":
+        return _color_tag("CRIT", Fore.RED)
+    if sev == "high":
+        return _color_tag("HIGH", Fore.YELLOW)
+    if sev == "medium":
+        return _color_tag("MED", Fore.GREEN)
+    return _color_tag("LOW", Fore.CYAN)
+
+
 RIGHT_SEVERITY = {
     "GetChanges_GetChangesAll": "critical",
     "GetChanges_GetChangesInFilteredSet": "critical",
@@ -226,37 +261,20 @@ env.filters["red"] = red
 # High value targets
 def print_hvt(args, db: Database):
     print()
-    print(f"{Fore.RED}♦USER{Style.RESET_ALL} the user is an admin")
     print(
-        f"{Fore.YELLOW}★USER{Style.RESET_ALL} there is a path to gain admin privileges"
-    )
-    print(f"{Style.UNDERLINE}USER{Style.RESET_ALL} the user is owned")
-    print(
-        f"{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn't tell that the user is an admin, it could be an old admin)"
+        f"{Fore.RED}♦{Style.RESET_ALL} admin | {Fore.YELLOW}★{Style.RESET_ALL} path-to-admin | {Style.UNDERLINE}owned{Style.RESET_ALL}"
     )
     print(
-        f"{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)"
+        f"badges: {Fore.GREEN}A{Style.RESET_ALL}=admincount {Fore.GREEN}K{Style.RESET_ALL}=spn {Fore.GREEN}N{Style.RESET_ALL}=asrep {Fore.GREEN}P{Style.RESET_ALL}=protected {Fore.GREEN}!R{Style.RESET_ALL}=blank {Fore.GREEN}S{Style.RESET_ALL}=sensitive {Fore.GREEN}T{Style.RESET_ALL}=t2a {Fore.GREEN}!X{Style.RESET_ALL}=never-expire"
     )
-    print(f"{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)")
-    print(f"{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group")
-    print(
-        f"{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)"
-    )
-    print(f"{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE")
-    print(
-        f"{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)"
-    )
-    print(f"{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD")
     print()
 
     for o in db.iter_users():
         if args.select and not o.name.upper().startswith(args.select.upper()):
             continue
 
-        if o.name.upper() in db.owned_db:
-            print(color1_object(o, underline=True), end="")
-        else:
-            print(color1_object(o), end="")
+        owned = o.name.upper() in db.owned_db
+        print(color1_object(o, underline=owned), end="")
 
         if o.admincount:
             print(f"{Fore.GREEN} A{Style.RESET_ALL}", end="")
@@ -284,34 +302,52 @@ def print_hvt(args, db: Database):
             for sid, rights in o.rights_by_sid.items():
                 if "RestrictedGroups" in rights:
                     print(
-                        f"    {Fore.BLACK}This user may be interesting. RestrictedGroups have not been{Style.RESET_ALL}"
-                    )
-                    print(
-                        f"    {Fore.BLACK}propagated to determine if the user can become an admin.{Style.RESET_ALL}"
+                        f"    {Fore.BLACK}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
                     )
                     break
 
-        for sid in o.group_sids:
+        groups = []
+        for sid in sorted(list(o.group_sids)):
             if sid == "many":
-                name = "many"
+                groups.append("many")
             elif sid not in db.objects_by_sid:
-                name = f"UNKNOWN_{sid}"
+                groups.append(f"UNKNOWN_{sid}")
             else:
-                name = color1_object(db.objects_by_sid[sid])
-            print(f"    < {name}")
+                groups.append(color1_object(db.objects_by_sid[sid]))
 
+        if not getattr(args, "full_groups", False) and len(groups) > 10:
+            groups = groups[:10] + [f"+{len(o.group_sids) - 10} more"]
+        _wrap_items("groups: ", groups, indent=4)
+
+        rights_by_sev: dict[str, list[str]] = {
+            "critical": [],
+            "high": [],
+            "medium": [],
+            "low": [],
+        }
         for sid, rights in o.rights_by_sid.items():
             if sid == "many":
-                name = "many"
+                target_name = _color_tag("many", Fore.BLACK)
             elif sid not in db.objects_by_sid:
-                name = f"UNKNOWN_{sid}"
+                target_name = _color_tag(f"UNKNOWN_{sid}", Fore.BLACK)
             else:
-                name = color1_object(db.objects_by_sid[sid])
-            for i, r in enumerate(rights.keys()):
-                if rights[r] is not None:
-                    print(f"    ({color_right_name(r)}, {rights[r]} -> {name})")
-                else:
-                    print(f"    ({color_right_name(r)}, {name})")
+                target_name = color1_object(db.objects_by_sid[sid])
+
+            for r in rights.keys():
+                sev = RIGHT_SEVERITY.get(r, "low")
+                entry = f"{color_right_name(r)}→{target_name}"
+                rights_by_sev[sev].append(entry)
+
+        if not getattr(args, "full_rights", False):
+            for sev in rights_by_sev.keys():
+                if len(rights_by_sev[sev]) > 10:
+                    rights_by_sev[sev] = rights_by_sev[sev][:10] + [
+                        f"+{len(rights_by_sev[sev]) - 10} more"
+                    ]
+
+        for sev in ["critical", "high", "medium", "low"]:
+            if rights_by_sev[sev]:
+                _wrap_items(f"{_sev_label(sev)} ", rights_by_sev[sev], indent=4)
     print()
 
 

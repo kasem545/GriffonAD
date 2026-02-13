@@ -133,6 +133,87 @@ def red(s):
     return f"{Fore.RED}{s}{Style.RESET_ALL}"
 
 
+def _color_tag(text: str, color: str) -> str:
+    return f"{color}{text}{Style.RESET_ALL}"
+
+
+RIGHT_SEVERITY = {
+    "GetChanges_GetChangesAll": "critical",
+    "GetChanges_GetChangesInFilteredSet": "critical",
+    "DCSync": "critical",
+    "GenericAll": "critical",
+    "WriteDacl": "critical",
+    "WriteOwner": "critical",
+    "Owns": "critical",
+    "AllExtendedRights": "high",
+    "AdminTo": "high",
+    "AddKeyCredentialLink": "high",
+    "AllowedToAct": "high",
+    "AllowedToDelegate": "high",
+    "WriteGPLink": "high",
+    "AddMember": "high",
+    "ForceChangePassword": "high",
+    "SeBackupPrivilege": "high",
+    "ReadLAPSPassword": "medium",
+    "ReadGMSAPassword": "medium",
+    "WriteSPN": "medium",
+    "WriteUserAccountControl": "medium",
+    "SetLogonScript": "medium",
+    "HasPrivSession": "high",
+    "HasSession": "medium",
+    "SessionForUser": "low",
+    "PrivSessionForUser": "medium",
+    "TrustedDomain": "low",
+    "TrustedDomainPivot": "medium",
+    "ADCS_ESC1": "high",
+    "ADCS_ESC2": "high",
+    "ADCS_ESC3": "high",
+    "ADCS_ESC4": "high",
+}
+
+
+def color_right_name(name: str) -> str:
+    sev = RIGHT_SEVERITY.get(name, "low")
+    if sev == "critical":
+        return _color_tag(name, Fore.RED)
+    if sev == "high":
+        return _color_tag(name, Fore.YELLOW)
+    if sev == "medium":
+        return _color_tag(name, Fore.GREEN)
+    return _color_tag(name, Fore.CYAN)
+
+
+def color_action_name(name: str) -> str:
+    if name.startswith("::"):
+        base = name
+        sev = "medium"
+        key = name[2:]
+        if key.startswith("ADCS_ESC") or key in ["DCSync", "DaclFullControl"]:
+            sev = "critical"
+        elif key in [
+            "AddKeyCredentialLink",
+            "ForceChangePassword",
+            "AddMember",
+            "WriteGPLink",
+            "AllowedToAct",
+            "AllowedToDelegate",
+        ]:
+            sev = "high"
+        elif key in ["ReadLAPSPassword", "ReadGMSAPassword", "WriteSPN", "EnableNP"]:
+            sev = "medium"
+        else:
+            sev = "low"
+
+        if sev == "critical":
+            return _color_tag(base, Fore.RED)
+        if sev == "high":
+            return _color_tag(base, Fore.YELLOW)
+        if sev == "medium":
+            return _color_tag(base, Fore.GREEN)
+        return _color_tag(base, Fore.CYAN)
+    return name
+
+
 tmpl_path = os.path.dirname(os.path.abspath(__file__)) + "/../templates"
 env = Environment(
     loader=FileSystemLoader(tmpl_path),
@@ -228,9 +309,9 @@ def print_hvt(args, db: Database):
                 name = color1_object(db.objects_by_sid[sid])
             for i, r in enumerate(rights.keys()):
                 if rights[r] is not None:
-                    print(f"    ({r}, {rights[r]} -> {name})")
+                    print(f"    ({color_right_name(r)}, {rights[r]} -> {name})")
                 else:
-                    print(f"    ({r}, {name})")
+                    print(f"    ({color_right_name(r)}, {name})")
     print()
 
 
@@ -321,9 +402,9 @@ def print_groups(args, db: Database):
                 name = color1_object(db.objects_by_sid[sid])
             for i, r in enumerate(rights.keys()):
                 if rights[r] is not None:
-                    print(f"    ({r}, {rights[r]} -> {name})")
+                    print(f"    ({color_right_name(r)}, {rights[r]} -> {name})")
                 else:
-                    print(f"    ({r}, {name})")
+                    print(f"    ({color_right_name(r)}, {name})")
 
     if args.select and not printed:
         print("This group may not have interesting rights")
@@ -405,10 +486,10 @@ def print_path(args, path: list):
 
             if args.rights:
                 if sym[:2] not in ["__", "::"]:
-                    print(f"{sym},", end="")
+                    print(f"{color_right_name(sym)},", end="")
             else:
                 if sym.startswith("::") and sym[2] != "_":
-                    print(f"{sym}", end="")
+                    print(f"{color_action_name(sym)}", end="")
 
                 if req is not None:
                     print(f"[{req['class_name']}]", end="")
@@ -637,7 +718,10 @@ def print_trusts(args, db: Database):
                 f"    -> {target} ({direction}, {trust_type}, {transitive}, {sid_filtering_txt})"
             )
             if tr["abuse_paths"]:
-                print(f"       abuse: {', '.join(tr['abuse_paths'])}")
+                abuse = ", ".join(
+                    [_color_tag(a, Fore.YELLOW) for a in tr["abuse_paths"]]
+                )
+                print(f"       abuse: {abuse}")
         print()
 
     if not found:
@@ -775,8 +859,8 @@ def print_dacl_matrix(args, db: Database):
 
     for o, target, used, abuses in rows[:120]:
         print(f"{color1_object(o)} -> {color1_object(target)}")
-        print(f"    rights: {', '.join(used)}")
-        print(f"    abuses: {', '.join(abuses)}")
+        print(f"    rights: {', '.join([color_right_name(u) for u in used])}")
+        print(f"    abuses: {', '.join([_color_tag(a, Fore.YELLOW) for a in abuses])}")
     print()
 
 
@@ -808,8 +892,9 @@ def print_adcs(args, db: Database):
         return
 
     for f in db.adcs_findings:
+        kind = _color_tag(f["type"], Fore.YELLOW)
         print(
-            f"- {f['principal']} can trigger {f['type']} via {f['template']} ({f['right']})"
+            f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
         )
     print()
 

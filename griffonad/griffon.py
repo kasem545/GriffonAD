@@ -11,6 +11,7 @@ from colorama import Style
 Style.UNDERLINE = "\033[4m"
 
 import os
+import sys
 import argparse
 import zipfile
 import tempfile
@@ -148,6 +149,17 @@ def trace_stop(args):
 
 
 def main():
+    try:
+        return _main()
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        return
+
+
+def _main():
     colorama_init()
 
     print("GriffonAD 0.6.9")
@@ -168,20 +180,14 @@ def main():
     parser.add_argument(
         "--desc", action="store_true", help="Print all objects with a description"
     )
-    parser.add_argument(
-        "--trusts", action="store_true", help="Print domain trust relationships"
-    )
+    parser.add_argument("--trusts", action="store_true", help="Print domain trusts")
     parser.add_argument(
         "--priorities",
         action="store_true",
         help="Score and rank high-impact opportunities (LAPS, gMSA, DCSync, delegation)",
     )
-    parser.add_argument(
-        "--adcs", action="store_true", help="Print ADCS ESC findings and graph"
-    )
-    parser.add_argument(
-        "--rodc", action="store_true", help="Print RODC replication policy findings"
-    )
+    parser.add_argument("--adcs", action="store_true", help="Print ADCS ESC findings")
+    parser.add_argument("--rodc", action="store_true", help="Print RODC findings")
     parser.add_argument(
         "--dacl-matrix",
         action="store_true",
@@ -401,7 +407,6 @@ def main():
         trace_stop(args)
         exit(0)
 
-    # Script generation
     line = int(args.script, 16)
     if line >= len(final_paths):
         print(f"[-] error: no path for the line {line}")

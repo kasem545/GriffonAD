@@ -164,11 +164,11 @@ def _wrap_items(
 
 def _sev_label(sev: str) -> str:
     if sev == "critical":
-        return _color_tag("CRITICAL", Fore.RED)
+        return _color_tag("CRIT", Fore.RED)
     if sev == "high":
         return _color_tag("HIGH", Fore.YELLOW)
     if sev == "medium":
-        return _color_tag("MEDIUM", Fore.GREEN)
+        return _color_tag("MED", Fore.GREEN)
     return _color_tag("LOW", Fore.CYAN)
 
 
@@ -269,10 +269,7 @@ def print_hvt(args, db: Database):
     )
     print()
 
-    for o in db.iter_users():
-        if args.select and not o.name.upper().startswith(args.select.upper()):
-            continue
-
+    def print_user(o):
         owned = o.name.upper() in db.owned_db
         print(color1_object(o, underline=owned), end="")
 
@@ -348,6 +345,38 @@ def print_hvt(args, db: Database):
         for sev in ["critical", "high", "medium", "low"]:
             if rights_by_sev[sev]:
                 _wrap_items(f"{_sev_label(sev)} ", rights_by_sev[sev], indent=4)
+
+    admins = []
+    pivots = []
+    others = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+        if o.is_admin:
+            admins.append(o)
+        elif o.can_admin:
+            pivots.append(o)
+        else:
+            others.append(o)
+
+    if admins:
+        print(_color_tag(f"Admins ({len(admins)})", Fore.RED))
+        print()
+        for o in admins:
+            print_user(o)
+
+    if pivots:
+        print(_color_tag(f"Paths-to-admin ({len(pivots)})", Fore.YELLOW))
+        print()
+        for o in pivots:
+            print_user(o)
+
+    if others:
+        print(_color_tag(f"Other ({len(others)})", Fore.CYAN))
+        print()
+        for o in others:
+            print_user(o)
+
     print()
 
 

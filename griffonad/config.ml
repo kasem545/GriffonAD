@@ -1,6 +1,12 @@
+set DefaultForceChangePassword = true
+set DefaultSetFullControl = true
+set DisplayAllGPOs = false
+set AllAddKeyCredentialLink = false
+set DontAddComputer = false
+
 #
 # Convention:
-# ::NAME(target) = this is an action (it generates code in lib/actions.py)
+# ::NAME(target) = this is an action (generated code is in templates/)
 # __NAME(target) = this is a temporary state
 # NAME(target) = this is a bloodhound right
 #
@@ -11,7 +17,7 @@
 
 # Private actions
 # The password is in hexa, it's easier to manage the computer with
-# it's AES key
+# its AES key
 ::_Secretsdump(computer) -> ::_TransformPasswordToAES
 ::_TransformPasswordToAES(any) -> apply_with_aes
 
@@ -32,7 +38,7 @@ AllowedToDelegate(many) => ::AllowedToDelegateToAny require_targets ta_dc
 
 # Manage special groups
 
-# 'Backup Operators'
+# 'Backup Operators' (551)
 # Works only on a DC when we are directly under this group
 # To work on other computers a GPO must set the user in this group
 SeBackupPrivilege(many) -> ::RegBackup \
@@ -48,12 +54,17 @@ GenericAll(many) -> GenericAll \
 # 'Key Admins' or 'Enterprise Key Admins'
 AddKeyCredentialLink(many) -> ::AddKeyCredentialLink   \
         require_targets ta_users_without_admincount \
-        if opt.allkeys and (526 in parent.groups or 527 in parent.groups) \
-        elsewarn "Set the option --opt allkeys to execute the scenario AddKeyCredentialLink(many)"
+        if AllAddKeyCredentialLink and \
+            (526 in parent.groups or 527 in parent.groups) \
+        elsewarn "Set the flag AllAddKeyCredentialLink in config.ml to execute the scenario AddKeyCredentialLink(many)"
 
 # PASSWD_NOTREQD: userAccountControl & 0x20
 ::BlankPassword(user) -> apply_with_blank_passwd
 ::BlankPassword(computer) -> apply_with_blank_passwd
+
+# We don't call the CanRDP on each computers (with a require_targets) of the
+# OU or domain because the list would be too long!
+::CanRDP(any) -> stop
 
 # User
 
@@ -77,7 +88,7 @@ WriteDacl(user) -> ::DaclInitialProgram
 ::DaclUserAccountControl(user) -> WriteUserAccountControl
 ::DaclServicePrincipalName(user) -> WriteSPN
 ::DaclInitialProgram(user) -> SetLogonScript
-::ForceChangePassword(user) -> apply_with_forced_passwd if not opt.noforce
+::ForceChangePassword(user) -> apply_with_forced_passwd if DefaultForceChangePassword
 ::AddKeyCredentialLink(user) -> apply_with_ticket
 ::Kerberoasting(user) -> apply_with_cracked_passwd \
         require_for_auth any_owned \
@@ -87,7 +98,6 @@ WriteDacl(user) -> ::DaclInitialProgram
 ::WriteSPN(user) -> ::Kerberoasting
 
 SessionForUser(user) -> ::LSASS_dumper
-PrivSessionForUser(user) -> ::LSASS_dumper
 # computer -> LSASS_dumper(user)
 # it means we own the computer and we know that the user has a session on it
 ::LSASS_dumper(user) -> apply_with_nthash
@@ -101,11 +111,10 @@ ReadGMSAPassword(user) -> ::ReadGMSAPassword
 
 # Computer
 AdminTo(computer) -> ::_Secretsdump
+SeBackupPrivilege(computer) -> ::RegBackup
 ReadLAPSPassword(computer) -> ::ReadLAPSPassword
 ::ReadLAPSPassword(computer) -> ::_TransformPasswordToAES
-SeBackupPrivilege(computer) -> ::RegBackup
 ::RegBackup(computer) -> ::_TransformPasswordToAES
-::CanRDP+SeBackupPrivilege(computer) -> ::_TransformPasswordToAES
 
 # RBCD
 # In the computer ldap object:
@@ -118,7 +127,7 @@ AllowedToAct(computer) -> ::U2U
 
 AddAllowedToAct(computer) -> ::RBCD
 ::RBCD(computer) -> ::AllowedToAct    require unprotected_owned_with_spn
-::RBCD(computer) -> ::AllowedToAct    require add_computer   if not opt.noaddcomputer
+::RBCD(computer) -> ::AllowedToAct    require add_computer   if not DontAddComputer
 ::RBCD(computer) -> ::U2U             require owned_user_without_spn
 ::U2U(computer) -> ::AllowedToAct if parent.is_user
 ::AllowedToAct(computer) -> ::_Secretsdump \
@@ -185,41 +194,24 @@ WriteDacl(group) -> ::DaclSelf
 # Domain
 AllExtendedRights(domain) -> GetChanges_GetChangesAll
 AllExtendedRights(domain) -> GetChanges_GetChangesInFilteredSet
-WriteDacl(domain) -> ::DaclDCSync
-TrustedDomain(domain) -> stop
-TrustedDomainPivot(domain) -> ::TrustPivot
-ADCS_ESC1(domain) -> ::ADCS_ESC1
-ADCS_ESC2(domain) -> ::ADCS_ESC2
-ADCS_ESC3(domain) -> ::ADCS_ESC3
-ADCS_ESC4(domain) -> ::ADCS_ESC4
 GetChanges_GetChangesAll(domain) -> ::DCSync
 GetChanges_GetChangesInFilteredSet(domain) -> ::DCSync if parent.is_dc
-::DaclDCSync(domain) -> GetChanges_GetChangesAll
-::TrustPivot(domain) -> stop
-::ADCS_ESC1(domain) -> ::DCSync
-::ADCS_ESC2(domain) -> ::DCSync
-::ADCS_ESC3(domain) -> ::DCSync
-::ADCS_ESC4(domain) -> ::DCSync
-# from GPO on domain
-SeBackupPrivilege(domain) -> ::RegBackup require_targets ta_dc
-# from GPO (local Administrator)
-AdminTo(domain) -> ::DCSync
 ::DCSync(domain) -> stop
+# from GPOs
+SeBackupPrivilege(domain) -> ::RegBackup require_targets ta_dc
+AdminTo(domain) -> ::DCSync # local Administrator
+CanRDP(domain) -> ::CanRDP
 
 # DC
-AdminTo(dc) -> ::_Secretsdump
-SeBackupPrivilege(dc) -> ::RegBackup
 GenericWrite(dc) -> AddKeyCredentialLink
 AddKeyCredentialLink(dc) -> ::AddKeyCredentialLink
-WriteDacl(dc) -> ::DaclKeyCredentialLink
-WriteDacl(dc) -> ::DaclFullControl
 ::AddKeyCredentialLink(dc) -> apply_with_ticket
 
 # GPO
-GenericWrite(gpo) -> ::GPOLogonScript          if opt.allgpo \
-    elsewarn "Set the option --opt allgpo to execute all GPO scenarios"
-GenericWrite(gpo) -> ::GPOImmediateTask        if opt.allgpo
-GenericWrite(gpo) -> ::GPODisableDefender      if opt.allgpo
+GenericWrite(gpo) -> ::GPOLogonScript          if DisplayAllGPOs \
+    elsewarn "Set the flag DisplayAllGPOs to execute all GPO scenarios"
+GenericWrite(gpo) -> ::GPOImmediateTask        if DisplayAllGPOs
+GenericWrite(gpo) -> ::GPODisableDefender      if DisplayAllGPOs
 GenericWrite(gpo) -> ::GPOAddLocalAdmin
 WriteDacl(gpo) -> ::DaclFullControl
 
@@ -237,26 +229,21 @@ WriteDacl(gpo) -> ::DaclFullControl
 
 # OU
 
+# Unimplemented
+# https://www.synacktiv.com/publications/ounedpy-exploiting-hidden-organizational-units-acl-attack-vectors-in-active-directory
+# https://markgamache.blogspot.com/2020/07/exploiting-ad-gplink-for-good-or-evil.html
 GenericWrite(ou) -> WriteGPLink
 WriteGPLink(ou) -> ::WriteGPLink
-WriteDacl(ou) -> ::DaclFullControl
-WriteDacl(ou) -> ::DaclWriteGPLink
-::DaclWriteGPLink(ou) -> WriteGPLink
-::WriteGPLink(ou) -> ::WriteGPLink require_targets ta_writable_gpos
+::WriteGPLink(ou) -> stop
 
-# Selected target with require_targets is a gpo
-::WriteGPLink(gpo) -> stop
-
-# from GPO on an OU
+# from GPOs
 SeBackupPrivilege(ou) -> ::RegBackup  require_targets ta_all_computers_in_ou
-# from GPO on an OU (local Administrator)
 AdminTo(ou) -> AdminTo require_targets ta_all_computers_in_ou
-CanRDP+SeBackupPrivilege(ou) -> ::CanRDP+SeBackupPrivilege \
-    require_targets ta_all_computers_in_ou
+CanRDP(ou) -> ::CanRDP
 
 # Last chance
-__WriteDacl(any) -> ::DaclFullControl if not opt.nofull
-__WriteDacl(any) -> WriteDacl         if opt.nofull
+__WriteDacl(any) -> ::DaclFullControl if DefaultSetFullControl
+__WriteDacl(any) -> WriteDacl         if not DefaultSetFullControl
 ::DaclFullControl(any) -> GenericAll
 Owns(any) -> __WriteDacl
 ::WriteOwner(any) -> Owns

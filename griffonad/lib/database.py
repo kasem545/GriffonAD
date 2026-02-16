@@ -41,18 +41,17 @@ class LDAPObject:
         self.is_admin = False
         self.can_admin = False
         self.type = type
-        self.sid = o["ObjectIdentifier"]  # it's the guid for gpo
-        self.protected = False  # in protected users group
-        self.group_rids = set()  # list of groups this object belongs
-        self.group_sids = set()  # list of groups this object belongs
-        self.gpo_links_to_ou = []  # only for GPO, it contains the ou dn
+        self.sid = o["ObjectIdentifier"]
+        self.protected = False
+        self.group_rids = set()
+        self.group_sids = set()
+        self.gpo_links_to_ou = []
         self.from_domain = o["Properties"]["domain"]
 
-        # Arg is most of the time set to None, it's useful for right=AllowedToDelegate,
-        # then arg is a list with authorized SPNs.
-        self.rights_by_sid = {}  # target_sid -> dict({right1: arg, right2: arg, ...})
+        self.rights_by_sid = {}
         self.is_owned_domain = False
         self.is_owned_dc = False
+        self.trusts = []
 
         self.lastlogon = (
             o["Properties"]["lastlogon"] if "lastlogon" in o["Properties"] else 0
@@ -749,8 +748,6 @@ class Database:
 
     def prune_users(self):
         to_remove = []
-        # Don't use iter_users, the list could be long!
-        # iter_users sorts by names before
         for sid in self.users:
             o = self.objects_by_sid[sid]
             if not o.enabled:
@@ -766,3 +763,189 @@ class Database:
                 to_remove.append(o.sid)
         for sid in to_remove:
             self.users.remove(sid)
+
+    def set_trusts(self):
+        def __to_sid(raw_sid):
+            if raw_sid in self.objects_by_sid:
+                return raw_sid
+            if raw_sid in self.prefixed_sids:
+                return self.prefixed_sids[raw_sid]
+            return None
+
+        def __direction_to_text(direction):
+            return {
+                0: "Disabled",
+                1: "Inbound",
+                2: "Outbound",
+                3: "Bidirectional",
+            }.get(direction, f"Unknown({direction})")
+
+        for domain in list(self.objects_by_sid.values()):
+            if isinstance(domain, FakeLDAPObject) or domain.type != c.T_DOMAIN:
+                continue
+
+            trusts = domain.bloodhound_json.get("Trusts", [])
+            domain.trusts = []
+
+            for trust in trusts:
+                target_sid = trust.get("TargetDomainSid", "")
+                target_sid = __to_sid(target_sid)
+                target_name = trust.get("TargetDomainName", "UNKNOWN_TRUST_DOMAIN")
+
+                if target_sid is None:
+                    fake = FakeLDAPObject()
+                    fake.type = c.T_DOMAIN
+                    fake.sid = trust.get(
+                        "TargetDomainSid", f"UNKNOWN_TRUST_SID_{target_name}"
+                    )
+                    fake.name = target_name
+                    fake.dn = target_name
+                    fake.from_domain = target_name
+                    target_sid = fake.sid
+                    self.objects_by_sid[target_sid] = fake
+                    self.objects_by_name[fake.name.upper()] = fake
+
+                target_domain = self.objects_by_sid[target_sid]
+
+                trust_data = {
+                    "sid": target_sid,
+                    "name": target_domain.name,
+                    "type": trust.get("TrustType", "Unknown"),
+                    "direction": trust.get("TrustDirection", -1),
+                    "direction_name": __direction_to_text(
+                        trust.get("TrustDirection", -1)
+                    ),
+                    "is_transitive": trust.get("IsTransitive", False),
+                    "sid_filtering_enabled": trust.get("SidFilteringEnabled", None),
+                    "trust_attributes": trust.get("TrustAttributes", []),
+                }
+
+                trust_data["abuse_paths"] = []
+                if trust_data["direction"] in [2, 3]:
+                    trust_data["abuse_paths"].append("outbound-auth")
+                if trust_data["is_transitive"]:
+                    trust_data["abuse_paths"].append("transitive-hop")
+                if trust_data["sid_filtering_enabled"] is False:
+                    trust_data["abuse_paths"].append("sid-history")
+                if trust_data["type"] in [2, "2", "Forest"]:
+                    trust_data["abuse_paths"].append("forest-trust")
+                if trust_data["type"] in [3, "3", "External"]:
+                    trust_data["abuse_paths"].append("external-trust")
+
+                domain.trusts.append(trust_data)
+
+                if target_sid not in domain.rights_by_sid:
+                    domain.rights_by_sid[target_sid] = {}
+                domain.rights_by_sid[target_sid]["TrustedDomain"] = trust_data
+
+                source_admin_sids = [
+                    f"{domain.sid}-512",
+                    f"{domain.sid}-519",
+                    f"{domain.name}-S-1-5-32-544",
+                ]
+                for admin_sid in source_admin_sids:
+                    if admin_sid not in self.objects_by_sid:
+                        continue
+                    src_obj = self.objects_by_sid[admin_sid]
+                    if target_sid not in src_obj.rights_by_sid:
+                        src_obj.rights_by_sid[target_sid] = {}
+                    src_obj.rights_by_sid[target_sid]["TrustedDomainPivot"] = trust_data
+                    self.trust_abuse_paths.append((src_obj.sid, target_sid, trust_data))
+
+    def set_adcs(self):
+        def __domain_sid_by_name(name):
+            for dom in self.domains.values():
+                if dom.name.upper() == name.upper():
+                    return dom.sid
+            return self.domain.sid
+
+        for tpl in self.adcs_templates.values():
+            if not tpl["enabled"]:
+                continue
+
+            findings = []
+            if (
+                tpl["enrollee_supplies_subject"]
+                and tpl["client_auth"]
+                and not tpl["manager_approval"]
+                and int(tpl["authorized_signatures"]) == 0
+            ):
+                findings.append("ESC1")
+            if tpl["any_purpose"]:
+                findings.append("ESC2")
+            if tpl["enrollment_agent"]:
+                findings.append("ESC3")
+
+            dangerous_write = set(["GenericAll", "WriteDacl", "WriteOwner", "Owns"])
+            enroll_rights = set(["Enroll", "AllExtendedRights"])
+
+            domain_sid = __domain_sid_by_name(tpl["domain"])
+
+            for ace in tpl["aces"]:
+                principal_sid = ace.get("PrincipalSID", "")
+                right_name = ace.get("RightName", "")
+
+                if principal_sid not in self.objects_by_sid:
+                    continue
+
+                principal = self.objects_by_sid[principal_sid]
+                if domain_sid not in principal.rights_by_sid:
+                    principal.rights_by_sid[domain_sid] = {}
+
+                if findings and right_name in enroll_rights:
+                    for esc in findings:
+                        principal.rights_by_sid[domain_sid][f"ADCS_{esc}"] = {
+                            "template": tpl["name"]
+                        }
+                        self.adcs_findings.append(
+                            {
+                                "principal": principal.name,
+                                "principal_sid": principal.sid,
+                                "domain_sid": domain_sid,
+                                "template": tpl["name"],
+                                "type": esc,
+                                "right": right_name,
+                            }
+                        )
+
+                if right_name in dangerous_write:
+                    principal.rights_by_sid[domain_sid]["ADCS_ESC4"] = {
+                        "template": tpl["name"]
+                    }
+                    self.adcs_findings.append(
+                        {
+                            "principal": principal.name,
+                            "principal_sid": principal.sid,
+                            "domain_sid": domain_sid,
+                            "template": tpl["name"],
+                            "type": "ESC4",
+                            "right": right_name,
+                        }
+                    )
+
+    def set_rodc(self):
+        self.rodc_findings = []
+        for o in self.objects_by_sid.values():
+            if isinstance(o, FakeLDAPObject) or o.type != c.T_DOMAIN:
+                continue
+
+            props = self._normalize_properties(o.bloodhound_json)
+            reveal = props.get("msds-revealondemandgroup", [])
+            never_reveal = props.get("msds-neverrevealgroup", [])
+
+            if reveal:
+                self.rodc_findings.append(
+                    {
+                        "domain": o.name,
+                        "kind": "RevealOnDemandGroup",
+                        "entries": reveal,
+                    }
+                )
+            if never_reveal:
+                self.rodc_findings.append(
+                    {
+                        "domain": o.name,
+                        "kind": "NeverRevealGroup",
+                        "entries": never_reveal,
+                    }
+                )

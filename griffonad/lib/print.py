@@ -264,9 +264,24 @@ def print_hvt(args, db: Database):
     print(
         f"{Fore.RED}♦{Style.RESET_ALL} admin | {Fore.YELLOW}★{Style.RESET_ALL} path-to-admin | {Style.UNDERLINE}owned{Style.RESET_ALL}"
     )
+    print()
+    print("badges:")
     print(
-        f"badges: {Fore.GREEN}A{Style.RESET_ALL}=admincount {Fore.GREEN}K{Style.RESET_ALL}=spn {Fore.GREEN}N{Style.RESET_ALL}=asrep {Fore.GREEN}P{Style.RESET_ALL}=protected {Fore.GREEN}!R{Style.RESET_ALL}=blank {Fore.GREEN}S{Style.RESET_ALL}=sensitive {Fore.GREEN}T{Style.RESET_ALL}=t2a {Fore.GREEN}!X{Style.RESET_ALL}=never-expire"
+        f"{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn't tell that the user is an admin, it could be an old admin)"
     )
+    print(
+        f"{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)"
+    )
+    print(f"{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)")
+    print(f"{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group")
+    print(
+        f"{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)"
+    )
+    print(f"{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE")
+    print(
+        f"{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)"
+    )
+    print(f"{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD")
     print()
 
     def print_user(o):
@@ -303,48 +318,29 @@ def print_hvt(args, db: Database):
                     )
                     break
 
-        groups = []
-        for sid in sorted(list(o.group_sids)):
+        for sid in o.group_sids:
             if sid == "many":
-                groups.append("many")
+                name = "many"
             elif sid not in db.objects_by_sid:
-                groups.append(f"UNKNOWN_{sid}")
+                name = f"UNKNOWN_{sid}"
             else:
-                groups.append(color1_object(db.objects_by_sid[sid]))
+                name = color1_object(db.objects_by_sid[sid])
+            print(f"    < {name}")
 
-        if not getattr(args, "full_groups", False) and len(groups) > 10:
-            groups = groups[:10] + [f"+{len(o.group_sids) - 10} more"]
-        _wrap_items("groups: ", groups, indent=4)
-
-        rights_by_sev: dict[str, list[str]] = {
-            "critical": [],
-            "high": [],
-            "medium": [],
-            "low": [],
-        }
         for sid, rights in o.rights_by_sid.items():
             if sid == "many":
-                target_name = _color_tag("many", Fore.BLACK)
+                target_name = "many"
             elif sid not in db.objects_by_sid:
-                target_name = _color_tag(f"UNKNOWN_{sid}", Fore.BLACK)
+                target_name = f"UNKNOWN_{sid}"
             else:
                 target_name = color1_object(db.objects_by_sid[sid])
-
             for r in rights.keys():
-                sev = RIGHT_SEVERITY.get(r, "low")
-                entry = f"{color_right_name(r)}→{target_name}"
-                rights_by_sev[sev].append(entry)
+                if rights[r] is not None:
+                    print(f"    {color_right_name(r)}({rights[r]} -> {target_name})")
+                else:
+                    print(f"    {color_right_name(r)}({target_name})")
 
-        if not getattr(args, "full_rights", False):
-            for sev in rights_by_sev.keys():
-                if len(rights_by_sev[sev]) > 10:
-                    rights_by_sev[sev] = rights_by_sev[sev][:10] + [
-                        f"+{len(rights_by_sev[sev]) - 10} more"
-                    ]
-
-        for sev in ["critical", "high", "medium", "low"]:
-            if rights_by_sev[sev]:
-                _wrap_items(f"{_sev_label(sev)} ", rights_by_sev[sev], indent=4)
+        print()
 
     admins = []
     pivots = []
@@ -737,3 +733,285 @@ def print_desc(db: Database):
                 else:
                     print(color1_object(o))
                 print("   ", o.description)
+
+
+def print_trusts(args, db: Database):
+    print()
+    found = False
+    for o in db.objects_by_sid.values():
+        if o.type != c.T_DOMAIN:
+            continue
+        if not hasattr(o, "trusts") or not o.trusts:
+            continue
+        found = True
+        print(color1_object(o))
+        for tr in o.trusts:
+            target = tr["name"]
+            direction = tr["direction_name"]
+            trust_type = tr["type"]
+            transitive = "transitive" if tr["is_transitive"] else "non-transitive"
+            sid_filtering = tr["sid_filtering_enabled"]
+            if sid_filtering is None:
+                sid_filtering_txt = "SIDFiltering:unknown"
+            elif sid_filtering:
+                sid_filtering_txt = "SIDFiltering:on"
+            else:
+                sid_filtering_txt = "SIDFiltering:off"
+            print(
+                f"    -> {target} ({direction}, {trust_type}, {transitive}, {sid_filtering_txt})"
+            )
+            if tr["abuse_paths"]:
+                abuse = ", ".join(
+                    [_color_tag(a, Fore.YELLOW) for a in tr["abuse_paths"]]
+                )
+                print(f"       abuse: {abuse}")
+        print()
+
+    if not found:
+        print("No trusts found in collected data")
+        print()
+
+
+def _score_user(db: Database, o):
+    score = 0
+    reasons = []
+    laps_targets = set()
+    gmsa_targets = set()
+
+    weights = {
+        "DCSync": 120,
+        "ReadLAPSPassword": 65,
+        "ReadGMSAPassword": 60,
+        "AddKeyCredentialLink": 50,
+        "AllowedToAct": 45,
+        "AllowedToDelegate": 45,
+        "ForceChangePassword": 40,
+        "AdminTo": 35,
+        "SeBackupPrivilege": 35,
+        "WriteDacl": 28,
+        "GenericAll": 25,
+    }
+
+    for target_sid, rights in o.rights_by_sid.items():
+        target = db.objects_by_sid.get(target_sid, None)
+        target_name = target.name if target is not None else target_sid
+
+        for right in rights.keys():
+            if right in weights:
+                score += weights[right]
+                reasons.append(right)
+
+            if right == "ReadLAPSPassword":
+                laps_targets.add(target_name)
+            elif right == "ReadGMSAPassword":
+                gmsa_targets.add(target_name)
+            elif right == "HasPrivSession":
+                score += 35
+                reasons.append("PrivSession")
+            elif right == "HasSession":
+                score += 12
+                reasons.append("Session")
+
+    if o.np:
+        score += 15
+        reasons.append("ASREPRoastable")
+
+    if o.spn and o.type == c.T_USER and o.name.upper() != "KRBTGT":
+        score += 12
+        reasons.append("Kerberoastable")
+
+    if o.passwordnotreqd:
+        score += 20
+        reasons.append("BlankPassword")
+
+    return score, sorted(set(reasons)), sorted(laps_targets), sorted(gmsa_targets)
+
+
+def print_priorities(args, db: Database):
+    entries = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+        score, reasons, laps_targets, gmsa_targets = _score_user(db, o)
+        if score <= 0:
+            continue
+        entries.append((score, o, reasons, laps_targets, gmsa_targets))
+
+    entries.sort(key=lambda item: (-item[0], item[1].name.upper()))
+
+    print()
+    print("Priority score (higher means faster path to privileged creds or control)")
+    print()
+
+    if not entries:
+        print("No prioritized opportunities found")
+        print()
+        return
+
+    for i, entry in enumerate(entries[:25], 1):
+        score, o, reasons, laps_targets, gmsa_targets = entry
+        name = color1_object(o, underline=o.name.upper() in db.owned_db)
+        print(f"{i:02d}. score={score:03d} {name}")
+        if laps_targets:
+            print(
+                f"    LAPS targets ({len(laps_targets)}): {', '.join(laps_targets[:4])}"
+            )
+        if gmsa_targets:
+            print(
+                f"    gMSA targets ({len(gmsa_targets)}): {', '.join(gmsa_targets[:4])}"
+            )
+        if reasons:
+            print(f"    reasons: {', '.join(reasons[:8])}")
+        print()
+
+
+def print_dacl_matrix(args, db: Database):
+    print()
+    print("DACL abuse matrix (reachable primitives)")
+    print()
+
+    rows = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+
+        for target_sid, rights in o.rights_by_sid.items():
+            target = db.objects_by_sid.get(target_sid)
+            if target is None:
+                continue
+
+            target_type = c.ML_TYPES_TO_STR.get(target.type, "unknown")
+            matrix = DACL_ABUSE_MATRIX.get(target_type, {})
+            if not matrix:
+                continue
+
+            abuses = set()
+            used = []
+            for right in rights.keys():
+                if right in matrix:
+                    used.append(right)
+                    abuses.update(matrix[right])
+
+            if abuses:
+                rows.append((o, target, sorted(used), sorted(abuses)))
+
+    if not rows:
+        print("No DACL abuse opportunities found")
+        print()
+        return
+
+    for o, target, used, abuses in rows[:120]:
+        print(f"{color1_object(o)} -> {color1_object(target)}")
+        print(f"    rights: {', '.join([color_right_name(u) for u in used])}")
+        print(f"    abuses: {', '.join([_color_tag(a, Fore.YELLOW) for a in abuses])}")
+    print()
+
+
+def print_adcs(args, db: Database):
+    print()
+    print("ADCS abuse graph (ESC baseline)")
+    print()
+
+    if not db.adcs_templates and not db.adcs_cas:
+        print("No ADCS objects found in collected data")
+        print()
+        return
+
+    if db.adcs_cas:
+        print("Enterprise CAs")
+        for ca in sorted(db.adcs_cas.values(), key=lambda x: x["name"].upper()):
+            web = "web-enrollment" if ca["web_enrollment"] else "rpc-only"
+            enc = (
+                "encryption-required"
+                if ca["enforce_encryption_icertrequest"]
+                else "encryption-not-required"
+            )
+            print(f"  - {ca['name']} ({web}, {enc})")
+        print()
+
+    if not db.adcs_findings:
+        print("No exploitable ESC1-ESC4 findings derived from template ACLs")
+        print()
+        return
+
+    for f in db.adcs_findings:
+        kind = _color_tag(f["type"], Fore.YELLOW)
+        print(
+            f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
+        )
+    print()
+
+
+def print_rodc(args, db: Database):
+    print()
+    print("RODC assessment")
+    print()
+
+    if not db.rodc_findings:
+        print("No RODC policy findings in collected data")
+        print()
+        return
+
+    for f in db.rodc_findings:
+        print(f"- {f['domain']}: {f['kind']}")
+        for e in f["entries"][:25]:
+            print(f"    {e}")
+    print()
+
+
+def print_acls(args, db: Database):
+    print()
+    print("ACL/DACL Permissions (who can do what to whom)")
+    print()
+
+    entries = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+
+        if not o.rights_by_sid:
+            continue
+
+        entries.append(o)
+
+    if not entries:
+        print("No ACL permissions found")
+        print()
+        return
+
+    for o in entries:
+        owned = o.name.upper() in db.owned_db
+        print(color1_object(o, underline=owned))
+
+        rights_by_sev = {
+            "critical": [],
+            "high": [],
+            "medium": [],
+            "low": [],
+        }
+
+        for target_sid, rights in o.rights_by_sid.items():
+            if target_sid == "many":
+                target_name = _color_tag("many", Fore.BLACK)
+            elif target_sid not in db.objects_by_sid:
+                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.BLACK)
+            else:
+                target_name = color1_object(db.objects_by_sid[target_sid])
+
+            for right in rights.keys():
+                sev = RIGHT_SEVERITY.get(right, "low")
+                arg = rights[right]
+                if arg is not None:
+                    entry = f"{color_right_name(right)}({arg}) → {target_name}"
+                else:
+                    entry = f"{color_right_name(right)} → {target_name}"
+                rights_by_sev[sev].append(entry)
+
+        for sev in ["critical", "high", "medium", "low"]:
+            if rights_by_sev[sev]:
+                for entry in rights_by_sev[sev]:
+                    print(f"    {entry}")
+
+        print()
+
+    print()

@@ -766,7 +766,13 @@ _CRED_KEYWORD_RE = re.compile(
 )
 
 _CRED_VALUE_RE = re.compile(
-    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{4,}$ "
+    r"(?<!\S)"
+    r"(?=[^\s]*[a-z])"
+    r"(?=[^\s]*[A-Z])"
+    r"(?=[^\s]*\d)"
+    r"(?=[^\s]*[^A-Za-z0-9\s])"
+    r"[^\s]{4,}"
+    r"(?!\S)"
 )
 
 

@@ -761,18 +761,28 @@ def print_script(args, db: Database, path: list):
 
 
 _CRED_KEYWORD_RE = re.compile(
-    r"(?i)\b(password|passwd|pwd|secret|credential"
-    r"|auth|pin|private[_\-]?key|access[_\-]?key|client[_\-]?secret)\b"
+    r"(?i)\b(password|passwd|pwd|secret|credential|token|otp"
+    r"|api[_\-]?key|private[_\-]?key|access[_\-]?key|client[_\-]?secret)\b"
 )
 
 _CRED_VALUE_RE = re.compile(
-    r"(?<!\S)"
-    r"(?=[^\s]*[a-z])"
-    r"(?=[^\s]*[A-Z])"
-    r"(?=[^\s]*\d)"
-    r"(?=[^\s]*[^A-Za-z0-9\s])"
-    r"[^\s]{6,}"
-    r"(?!\S)"
+    r"(?<!\S)(?:"
+    r"(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s])[^\s]{4,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)[^\s]{6,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*[^A-Za-z0-9\s])[^\s]{6,}"
+    r"|(?=[^\s]*[A-Za-z])(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s])[^\s]{6,}"
+    r"|(?=[^\s]*[A-Za-z])(?=[^\s]*\d)[^\s]{8,}"
+    r"|(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s])(?![^\s]*[A-Za-z])[^\s]{8,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[^A-Za-z0-9\s])(?![^\s]*[A-Z])(?![^\s]*\d)[^\s]{8,}"
+    r"|(?=[^\s]*[A-Z])(?=[^\s]*[^A-Za-z0-9\s])(?![^\s]*[a-z])(?![^\s]*\d)[^\s]{8,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?![^\s]*\d)(?![^\s]*[^A-Za-z0-9\s])[^\s]{10,}"
+    r"|\d{8,}"
+    r"|[a-z]{10,}"
+    r"|[A-Z]{10,}"
+    r"|[^A-Za-z0-9\s]{6,}"
+    r"|[A-Za-z0-9+/]{20,}={0,2}"
+    r"|[0-9a-fA-F]{32,}"
+    r")(?!\S)"
 )
 
 

@@ -358,6 +358,10 @@ def main():
         exit(0)
 
     if args.__dict__.get("all"):
+        args.members = True
+        args.sid = True
+        args.full_groups = True
+        args.full_rights = True
         args.trusts = True
         args.priorities = True
         args.adcs = True
@@ -369,6 +373,23 @@ def main():
         args.delegation_chains = True
         args.principal_types = True
         args.protected_analysis = True
+        print_hvt(args, db)
+        print_ous(args, db)
+        print_groups(args, db)
+        print_desc(db)
+        print_trusts(args, db)
+        print_priorities(args, db)
+        print_adcs(args, db)
+        print_rodc(args, db)
+        print_dacl_matrix(args, db)
+        print_acls(args, db)
+        print_ace_inheritance(args, db)
+        print_rbcd_matrix(args, db)
+        print_delegation_chains(args, db)
+        print_principal_types(args, db)
+        print_protected_analysis(args, db)
+        trace_stop(args)
+        exit(0)
 
     if args.ous:
         print_ous(args, db)
@@ -382,22 +403,6 @@ def main():
 
     if args.desc:
         print_desc(db)
-        trace_stop(args)
-        exit(0)
-
-    if args.__dict__.get("all"):
-        print_hvt(args, db)
-        print_trusts(args, db)
-        print_priorities(args, db)
-        print_adcs(args, db)
-        print_rodc(args, db)
-        print_dacl_matrix(args, db)
-        print_acls(args, db)
-        print_ace_inheritance(args, db)
-        print_rbcd_matrix(args, db)
-        print_delegation_chains(args, db)
-        print_principal_types(args, db)
-        print_protected_analysis(args, db)
         trace_stop(args)
         exit(0)
 

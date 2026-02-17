@@ -43,6 +43,48 @@ ACTION_CLEANUP = {
     "::DaclWriteGPLink": "Remove WriteGPLink ACE from OU ACL",
 }
 
+# Well-known privileged RIDs and builtin SIDs to filter from ADCS noise.
+# These principals already have domain-level privilege — an ADCS finding for
+# them is expected and uninteresting from an attacker's perspective.
+PRIVILEGED_RIDS: set[int] = {
+    500,  # Administrator
+    502,  # krbtgt
+    512,  # Domain Admins
+    516,  # Domain Controllers
+    517,  # Cert Publishers
+    518,  # Schema Admins
+    519,  # Enterprise Admins
+    520,  # Group Policy Creator Owners
+    521,  # Read-only Domain Controllers
+}
+
+PRIVILEGED_BUILTIN_SIDS: set[str] = {
+    "S-1-5-32-544",  # Administrators
+    "S-1-5-32-548",  # Account Operators
+    "S-1-5-32-549",  # Server Operators
+    "S-1-5-32-550",  # Print Operators
+    "S-1-5-32-551",  # Backup Operators
+    "S-1-5-9",  # Enterprise Domain Controllers
+    "S-1-5-18",  # SYSTEM / LocalSystem
+}
+
+
+def _is_privileged_principal(principal_sid: str) -> bool:
+    """Return True if the SID belongs to a well-known privileged principal."""
+    if principal_sid in PRIVILEGED_BUILTIN_SIDS:
+        return True
+    # Check RID (last component of S-1-5-21-...-<RID>)
+    parts = principal_sid.split("-")
+    if len(parts) >= 2:
+        try:
+            rid = int(parts[-1])
+            if rid in PRIVILEGED_RIDS:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
 DACL_ABUSE_MATRIX = {
     "user": {
         "WriteDacl": [
@@ -934,11 +976,33 @@ def print_adcs(args, db: Database):
         print()
         return
 
-    for f in db.adcs_findings:
-        kind = _color_tag(f["type"], Fore.YELLOW)
+    privileged = [
+        f for f in db.adcs_findings if _is_privileged_principal(f["principal_sid"])
+    ]
+    actionable = [
+        f for f in db.adcs_findings if not _is_privileged_principal(f["principal_sid"])
+    ]
+
+    if privileged:
         print(
-            f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
+            _color_tag(
+                f"Filtered out — privileged principals ({len(privileged)})", Fore.BLACK
+            )
         )
+        for f in privileged:
+            kind = _color_tag(f["type"], Fore.BLACK)
+            print(f"  - {f['principal']} → {kind} via {f['template']} ({f['right']})")
+        print()
+
+    if actionable:
+        print(_color_tag(f"Actionable findings ({len(actionable)})", Fore.RED))
+        for f in actionable:
+            kind = _color_tag(f["type"], Fore.YELLOW)
+            print(
+                f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
+            )
+    else:
+        print("No actionable findings after filtering privileged principals")
     print()
 
 

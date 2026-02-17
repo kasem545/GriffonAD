@@ -348,7 +348,7 @@ def print_hvt(args, db: Database):
             print(f"{Fore.GREEN} !X{Style.RESET_ALL}", end="")
 
         if args.sid:
-            print(f" {Fore.BLACK}{o.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.CYAN}{o.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -356,7 +356,7 @@ def print_hvt(args, db: Database):
             for sid, rights in o.rights_by_sid.items():
                 if "RestrictedGroups" in rights:
                     print(
-                        f"    {Fore.BLACK}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
+                        f"    {Fore.CYAN}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
                     )
                     break
 
@@ -437,7 +437,7 @@ def print_ous(args, db: Database):
         print(ou.dn, end="")
 
         if args.sid:
-            print(f" {Fore.BLACK}{ou.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.CYAN}{ou.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -486,7 +486,7 @@ def print_groups(args, db: Database):
         print(f"{color1_object(g)}", end="")
 
         if args.sid:
-            print(f" {Fore.BLACK}{g.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.CYAN}{g.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -1043,9 +1043,9 @@ def print_acls(args, db: Database):
 
         for target_sid, rights in o.rights_by_sid.items():
             if target_sid == "many":
-                target_name = _color_tag("many", Fore.BLACK)
+                target_name = _color_tag("many", Fore.CYAN)
             elif target_sid not in db.objects_by_sid:
-                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.BLACK)
+                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.CYAN)
             else:
                 target_name = color1_object(db.objects_by_sid[target_sid])
 

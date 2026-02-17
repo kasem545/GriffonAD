@@ -452,6 +452,15 @@ class Database:
                     if ou_dn.startswith("OU=") and ou_dn in self.ous_by_dn:
                         self.ous_by_dn[ou_dn]["members"].append(o.sid)
 
+    def store_ace_metadata(self):
+        for o in self.objects_by_sid.values():
+            if not hasattr(o, "bloodhound_json") or o.bloodhound_json is None:
+                continue
+
+            aces = o.bloodhound_json.get("Aces", [])
+            if aces:
+                o.aces_metadata = aces
+
     def propagate_aces(self):
         def __set_or_add(rights, sid, right):
             if sid in rights:

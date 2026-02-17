@@ -1015,3 +1015,280 @@ def print_acls(args, db: Database):
         print()
 
     print()
+
+
+def print_ace_inheritance(args, db: Database):
+    print()
+    print("ACE Inheritance Analysis")
+    print()
+
+    explicit_aces = []
+    inherited_aces = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "aces_metadata"):
+            continue
+
+        for ace in o.aces_metadata:
+            if ace["IsInherited"]:
+                inherited_aces.append((o, ace))
+            else:
+                explicit_aces.append((o, ace))
+
+    suspicious_explicit = []
+    for target, ace in explicit_aces:
+        principal_sid = ace.get("PrincipalSID")
+        if principal_sid not in db.objects_by_sid:
+            continue
+
+        principal = db.objects_by_sid[principal_sid]
+        right = ace.get("RightName")
+
+        if right in ["GenericAll", "WriteDacl", "WriteOwner", "Owns"]:
+            if principal.type == c.T_USER and not principal.is_admin:
+                suspicious_explicit.append((principal, target, ace))
+            elif principal.type == c.T_COMPUTER:
+                suspicious_explicit.append((principal, target, ace))
+
+    if suspicious_explicit:
+        print(_color_tag("Suspicious Explicit ACE Grants", Fore.RED))
+        print()
+        for principal, target, ace in suspicious_explicit[:50]:
+            right = ace.get("RightName")
+            principal_type = ace.get("PrincipalType", "Unknown")
+            print(
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)}, explicit, {principal_type})"
+            )
+            if principal.type == c.T_COMPUTER:
+                print(f"    ⚠️  Computer with explicit ACE (unusual)")
+            elif target.type == c.T_DOMAIN:
+                print(f"    ⚠️  Explicit grant on domain object")
+            elif target.is_admin or target.can_admin:
+                print(f"    ⚠️  Explicit grant on admin/path-to-admin object")
+        print()
+    else:
+        print("No suspicious explicit ACE grants found")
+        print()
+
+    if args.select:
+        print(_color_tag(f"Inherited ACEs (first 10)", Fore.CYAN))
+        print()
+        for target, ace in inherited_aces[:10]:
+            principal_sid = ace.get("PrincipalSID")
+            if principal_sid not in db.objects_by_sid:
+                continue
+            principal = db.objects_by_sid[principal_sid]
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)}, inherited)"
+            )
+        print()
+
+
+def print_rbcd_matrix(args, db: Database):
+    print()
+    print("Resource-Based Constrained Delegation Matrix")
+    print()
+
+    rbcd_targets = []
+    rbcd_sources = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "bloodhound_json"):
+            continue
+
+        allowed_to_act = o.bloodhound_json.get("AllowedToAct", [])
+        if allowed_to_act:
+            for delegator in allowed_to_act:
+                delegator_sid = delegator.get("ObjectIdentifier")
+                if delegator_sid in db.objects_by_sid:
+                    delegator_obj = db.objects_by_sid[delegator_sid]
+                    rbcd_targets.append((o, delegator_obj))
+
+        allowed_to_delegate = o.bloodhound_json.get("AllowedToDelegate", [])
+        if allowed_to_delegate:
+            for target in allowed_to_delegate:
+                target_sid = target.get("ObjectIdentifier")
+                if target_sid in db.objects_by_sid:
+                    target_obj = db.objects_by_sid[target_sid]
+                    rbcd_sources.append((o, target_obj))
+
+    if rbcd_targets:
+        print(
+            _color_tag("Computers Allowing Delegation FROM Others (RBCD)", Fore.YELLOW)
+        )
+        print()
+        for target, delegator in rbcd_targets:
+            print(
+                f"{color1_object(target)} ← allows delegation from: {color1_object(delegator)}"
+            )
+            if not delegator.is_admin and delegator.type == c.T_USER:
+                print(f"    ⚠️  Non-admin user can delegate (exploitable!)")
+            elif delegator.type == c.T_COMPUTER and not delegator.is_admin:
+                print(f"    ⚠️  Non-admin computer can delegate")
+        print()
+    else:
+        print("No RBCD configurations found")
+        print()
+
+    if rbcd_sources:
+        print(_color_tag("Computers with Constrained Delegation", Fore.CYAN))
+        print()
+        for source, target in rbcd_sources:
+            print(f"{color1_object(source)} → can delegate to: {color1_object(target)}")
+        print()
+
+
+def print_delegation_chains(args, db: Database):
+    print()
+    print("Delegation Chain Analysis")
+    print()
+
+    chains = []
+
+    for o in db.objects_by_sid.values():
+        if o.type not in [c.T_USER, c.T_COMPUTER]:
+            continue
+
+        if not o.rights_by_sid:
+            continue
+
+        path = []
+        current = o
+
+        for target_sid, rights in current.rights_by_sid.items():
+            if target_sid not in db.objects_by_sid:
+                continue
+
+            target = db.objects_by_sid[target_sid]
+
+            if "AllowedToDelegate" in rights or "AllowedToAct" in rights:
+                path.append((current, target, "delegation"))
+
+                if target.unconstraineddelegation and target.is_admin:
+                    path.append((target, None, "unconstrained-to-DA"))
+                    chains.append(path)
+                    break
+
+                if target.is_admin:
+                    chains.append(path)
+                    break
+
+    if chains:
+        print(_color_tag(f"Delegation Chains to Admin ({len(chains)})", Fore.RED))
+        print()
+        for i, chain in enumerate(chains[:20], 1):
+            print(f"{i}. ", end="")
+            for j, (source, target, chain_type) in enumerate(chain):
+                if j > 0:
+                    print(" → ", end="")
+                print(f"{color1_object(source)}", end="")
+                if target:
+                    print(f" ({chain_type})", end="")
+            print()
+            if chain[-1][2] == "unconstrained-to-DA":
+                print(f"    ⚠️  Ends at unconstrained delegation (high risk)")
+            print()
+    else:
+        print("No delegation chains to admin found")
+        print()
+
+
+def print_principal_types(args, db: Database):
+    print()
+    print("ACE Analysis by Principal Type")
+    print()
+
+    computer_aces = []
+    user_aces = []
+    group_aces = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "aces_metadata"):
+            continue
+
+        for ace in o.aces_metadata:
+            principal_sid = ace.get("PrincipalSID")
+            if principal_sid not in db.objects_by_sid:
+                continue
+
+            principal = db.objects_by_sid[principal_sid]
+            right = ace.get("RightName")
+
+            if right in ["GenericAll", "WriteDacl", "WriteOwner", "Owns"]:
+                if principal.type == c.T_COMPUTER:
+                    computer_aces.append((principal, o, ace))
+                elif principal.type == c.T_USER:
+                    user_aces.append((principal, o, ace))
+                elif principal.type == c.T_GROUP:
+                    group_aces.append((principal, o, ace))
+
+    if computer_aces:
+        print(_color_tag("Computers with ACL Rights (Unusual)", Fore.RED))
+        print()
+        for principal, target, ace in computer_aces[:30]:
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)})"
+            )
+            print(
+                f"    ⚠️  Computers rarely need ACL rights - possible misconfiguration"
+            )
+        print()
+    else:
+        print("No computer principals with dangerous ACL rights")
+        print()
+
+    if user_aces and args.select:
+        print(_color_tag("Users with ACL Rights (Normal)", Fore.CYAN))
+        print()
+        for principal, target, ace in user_aces[:20]:
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)})"
+            )
+        print()
+
+
+def print_protected_analysis(args, db: Database):
+    print()
+    print("ACL Protection Status Analysis")
+    print()
+
+    protected_objects = []
+    unprotected_hvt = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "bloodhound_json"):
+            continue
+
+        is_protected = o.bloodhound_json.get("IsACLProtected", False)
+
+        if is_protected:
+            protected_objects.append(o)
+        elif o.is_admin or o.type == c.T_DOMAIN:
+            unprotected_hvt.append(o)
+
+    if protected_objects:
+        print(_color_tag(f"Protected Objects ({len(protected_objects)})", Fore.GREEN))
+        print()
+        for o in protected_objects[:20]:
+            print(f"✓ {color1_object(o)} (ACL inheritance disabled)")
+        print()
+    else:
+        print("No ACL-protected objects found")
+        print()
+
+    if unprotected_hvt:
+        print(
+            _color_tag(
+                f"Unprotected High-Value Objects ({len(unprotected_hvt)})", Fore.RED
+            )
+        )
+        print()
+        for o in unprotected_hvt[:20]:
+            print(f"⚠️  {color1_object(o)} (vulnerable to OU-level inheritance)")
+        print()
+    else:
+        print("All high-value objects are ACL-protected")
+        print()

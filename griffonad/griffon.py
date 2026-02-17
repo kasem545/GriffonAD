@@ -35,6 +35,11 @@ from griffonad.lib.print import (
     print_adcs,
     print_rodc,
     print_acls,
+    print_ace_inheritance,
+    print_rbcd_matrix,
+    print_delegation_chains,
+    print_principal_types,
+    print_protected_analysis,
 )
 from griffonad.lib.database import Database, Owned
 from griffonad.lib.ml import MiniLanguage
@@ -208,6 +213,31 @@ def main():
         action="store_true",
         help="Print detailed ACL/DACL permissions (who can do what to whom)",
     )
+    parser.add_argument(
+        "--ace-inheritance",
+        action="store_true",
+        help="Analyze explicit vs inherited ACEs (find suspicious grants)",
+    )
+    parser.add_argument(
+        "--rbcd-matrix",
+        action="store_true",
+        help="Resource-Based Constrained Delegation matrix",
+    )
+    parser.add_argument(
+        "--delegation-chains",
+        action="store_true",
+        help="Find multi-hop delegation paths to admin",
+    )
+    parser.add_argument(
+        "--principal-types",
+        action="store_true",
+        help="Analyze ACEs by principal type (identify unusual computer ACEs)",
+    )
+    parser.add_argument(
+        "--protected-analysis",
+        action="store_true",
+        help="ACL protection status for high-value objects",
+    )
 
     arg_paths = parser.add_argument_group("Paths")
     arg_paths.add_argument("--fromo", action="store_true", help="Paths from owned")
@@ -301,12 +331,12 @@ def main():
                 sysv.updatedb(db)
 
             db.propagate_admin_groups()
+            db.store_ace_metadata()
             db.propagate_aces()
             db.merge_rights()
             db.set_delegations()
             db.reverse_relations()
             db.propagate_can_admin(ml)
-            # db.reduce_aces()
             db.set_has_sessions()
             db.prune_users()
             db.load_owned(args)
@@ -364,6 +394,31 @@ def main():
 
     if args.acls:
         print_acls(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.ace_inheritance:
+        print_ace_inheritance(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.rbcd_matrix:
+        print_rbcd_matrix(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.delegation_chains:
+        print_delegation_chains(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.principal_types:
+        print_principal_types(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.protected_analysis:
+        print_protected_analysis(args, db)
         trace_stop(args)
         exit(0)
 

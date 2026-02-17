@@ -348,7 +348,7 @@ def print_hvt(args, db: Database):
             print(f"{Fore.GREEN} !X{Style.RESET_ALL}", end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{o.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.WHITE}{o.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -356,7 +356,7 @@ def print_hvt(args, db: Database):
             for sid, rights in o.rights_by_sid.items():
                 if "RestrictedGroups" in rights:
                     print(
-                        f"    {Fore.CYAN}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
+                        f"    {Fore.WHITE}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
                     )
                     break
 
@@ -437,7 +437,7 @@ def print_ous(args, db: Database):
         print(ou.dn, end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{ou.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.WHITE}{ou.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -486,7 +486,7 @@ def print_groups(args, db: Database):
         print(f"{color1_object(g)}", end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{g.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.WHITE}{g.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -760,6 +760,30 @@ def print_script(args, db: Database, path: list):
         previous_action = symbol
 
 
+_CRED_KEYWORD_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|pass|secret|cred|credential|key|token|api[_\-]?key"
+    r"|auth|pin|otp|private[_\-]?key|access[_\-]?key|client[_\-]?secret)\b"
+)
+
+_CRED_VALUE_RE = re.compile(
+    r"(?<!\w)"
+    r"(?=[^\s]*[A-Za-z])"
+    r"(?=[^\s]*[\d!@#$%^&*()\-_=+\[\]{}|;:\"',./<>?~\\])"
+    r"[A-Za-z\d!@#$%^&*()\-_=+\[\]{}|;:\"',./<>?~\\]{6,}"
+    r"(?!\w)"
+)
+
+
+def _highlight_creds(text: str) -> str:
+    text = _CRED_VALUE_RE.sub(
+        lambda m: f"{Fore.YELLOW}{Style.BRIGHT}{m.group()}{Style.RESET_ALL}", text
+    )
+    text = _CRED_KEYWORD_RE.sub(
+        lambda m: f"{Fore.RED}{Style.BRIGHT}{m.group()}{Style.RESET_ALL}", text
+    )
+    return text
+
+
 def print_desc(db: Database):
     for o in db.objects_by_sid.values():
         if o.description is not None and o.description.strip():
@@ -774,7 +798,7 @@ def print_desc(db: Database):
                     print(color2_object(o))
                 else:
                     print(color1_object(o))
-                print("   ", o.description)
+                print("   ", _highlight_creds(o.description))
 
 
 def print_trusts(args, db: Database):
@@ -1043,9 +1067,9 @@ def print_acls(args, db: Database):
 
         for target_sid, rights in o.rights_by_sid.items():
             if target_sid == "many":
-                target_name = _color_tag("many", Fore.CYAN)
+                target_name = _color_tag("many", Fore.WHITE)
             elif target_sid not in db.objects_by_sid:
-                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.CYAN)
+                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.WHITE)
             else:
                 target_name = color1_object(db.objects_by_sid[target_sid])
 

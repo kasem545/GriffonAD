@@ -762,6 +762,7 @@ def print_script(args, db: Database, path: list):
 
 _CRED_KEYWORD_RE = re.compile(
     r"(?i)\b(password|passwd|pwd|secret|credential"
+    r"|auth|pin|private[_\-]?key|access[_\-]?key|client[_\-]?secret)\b"
 )
 
 _CRED_VALUE_RE = re.compile(

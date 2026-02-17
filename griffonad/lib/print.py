@@ -169,7 +169,7 @@ def _sev_label(sev: str) -> str:
         return _color_tag("HIGH", Fore.YELLOW)
     if sev == "medium":
         return _color_tag("MEDIUM", Fore.GREEN)
-    return _color_tag("LOW", Fore.BLUE)
+    return _color_tag("LOW", Fore.CYAN)
 
 
 RIGHT_SEVERITY = {
@@ -215,7 +215,7 @@ def color_right_name(name: str) -> str:
         return _color_tag(name, Fore.YELLOW)
     if sev == "medium":
         return _color_tag(name, Fore.GREEN)
-    return _color_tag(name, Fore.BLUE)
+    return _color_tag(name, Fore.CYAN)
 
 
 def color_action_name(name: str) -> str:
@@ -245,7 +245,7 @@ def color_action_name(name: str) -> str:
             return _color_tag(base, Fore.YELLOW)
         if sev == "medium":
             return _color_tag(base, Fore.GREEN)
-        return _color_tag(base, Fore.BLUE)
+        return _color_tag(base, Fore.CYAN)
     return name
 
 
@@ -306,7 +306,7 @@ def print_hvt(args, db: Database):
             print(f"{Fore.GREEN} !X{Style.RESET_ALL}", end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{o.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.BLACK}{o.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -314,7 +314,7 @@ def print_hvt(args, db: Database):
             for sid, rights in o.rights_by_sid.items():
                 if "RestrictedGroups" in rights:
                     print(
-                        f"    {Fore.CYAN}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
+                        f"    {Fore.BLACK}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
                     )
                     break
 
@@ -368,7 +368,7 @@ def print_hvt(args, db: Database):
             print_user(o)
 
     if others:
-        print(_color_tag(f"\nOther ({len(others)})", Fore.BLUE))
+        print(_color_tag(f"\nOther ({len(others)})", Fore.CYAN))
         print()
         for o in others:
             print_user(o)
@@ -395,7 +395,7 @@ def print_ous(args, db: Database):
         print(ou.dn, end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{ou.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.BLACK}{ou.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -444,7 +444,7 @@ def print_groups(args, db: Database):
         print(f"{color1_object(g)}", end="")
 
         if args.sid:
-            print(f" {Fore.CYAN}{g.sid}{Style.RESET_ALL}", end="")
+            print(f" {Fore.BLACK}{g.sid}{Style.RESET_ALL}", end="")
 
         print()
 
@@ -992,9 +992,9 @@ def print_acls(args, db: Database):
 
         for target_sid, rights in o.rights_by_sid.items():
             if target_sid == "many":
-                target_name = _color_tag("many", Fore.CYAN)
+                target_name = _color_tag("many", Fore.BLACK)
             elif target_sid not in db.objects_by_sid:
-                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.CYAN)
+                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.BLACK)
             else:
                 target_name = color1_object(db.objects_by_sid[target_sid])
 
@@ -1071,7 +1071,7 @@ def print_ace_inheritance(args, db: Database):
         print()
 
     if args.select:
-        print(_color_tag(f"Inherited ACEs (first 10)", Fore.BLUE))
+        print(_color_tag(f"Inherited ACEs (first 10)", Fore.CYAN))
         print()
         for target, ace in inherited_aces[:10]:
             principal_sid = ace.get("PrincipalSID")
@@ -1132,7 +1132,7 @@ def print_rbcd_matrix(args, db: Database):
         print()
 
     if rbcd_sources:
-        print(_color_tag("Computers with Constrained Delegation", Fore.BLUE))
+        print(_color_tag("Computers with Constrained Delegation", Fore.CYAN))
         print()
         for source, target in rbcd_sources:
             print(f"{color1_object(source)} → can delegate to: {color1_object(target)}")
@@ -1240,7 +1240,7 @@ def print_principal_types(args, db: Database):
         print()
 
     if user_aces and args.select:
-        print(_color_tag("Users with ACL Rights (Normal)", Fore.BLUE))
+        print(_color_tag("Users with ACL Rights (Normal)", Fore.CYAN))
         print()
         for principal, target, ace in user_aces[:20]:
             right = ace.get("RightName")

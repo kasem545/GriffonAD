@@ -238,6 +238,11 @@ def main():
         action="store_true",
         help="ACL protection status for high-value objects",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Run all analysis flags (hvt, trusts, priorities, adcs, rodc, dacl-matrix, acls, ace-inheritance, rbcd-matrix, delegation-chains, principal-types, protected-analysis)",
+    )
 
     arg_paths = parser.add_argument_group("Paths")
     arg_paths.add_argument("--fromo", action="store_true", help="Paths from owned")
@@ -352,6 +357,19 @@ def main():
         Graph(db).run()
         exit(0)
 
+    if args.__dict__.get("all"):
+        args.trusts = True
+        args.priorities = True
+        args.adcs = True
+        args.rodc = True
+        args.dacl_matrix = True
+        args.acls = True
+        args.ace_inheritance = True
+        args.rbcd_matrix = True
+        args.delegation_chains = True
+        args.principal_types = True
+        args.protected_analysis = True
+
     if args.ous:
         print_ous(args, db)
         trace_stop(args)
@@ -364,6 +382,22 @@ def main():
 
     if args.desc:
         print_desc(db)
+        trace_stop(args)
+        exit(0)
+
+    if args.__dict__.get("all"):
+        print_hvt(args, db)
+        print_trusts(args, db)
+        print_priorities(args, db)
+        print_adcs(args, db)
+        print_rodc(args, db)
+        print_dacl_matrix(args, db)
+        print_acls(args, db)
+        print_ace_inheritance(args, db)
+        print_rbcd_matrix(args, db)
+        print_delegation_chains(args, db)
+        print_principal_types(args, db)
+        print_protected_analysis(args, db)
         trace_stop(args)
         exit(0)
 

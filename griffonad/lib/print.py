@@ -976,33 +976,20 @@ def print_adcs(args, db: Database):
         print()
         return
 
-    privileged = [
-        f for f in db.adcs_findings if _is_privileged_principal(f["principal_sid"])
-    ]
     actionable = [
         f for f in db.adcs_findings if not _is_privileged_principal(f["principal_sid"])
     ]
 
-    if privileged:
-        print(
-            _color_tag(
-                f"Filtered out — privileged principals ({len(privileged)})", Fore.BLACK
-            )
-        )
-        for f in privileged:
-            kind = _color_tag(f["type"], Fore.BLACK)
-            print(f"  - {f['principal']} → {kind} via {f['template']} ({f['right']})")
-        print()
-
-    if actionable:
-        print(_color_tag(f"Actionable findings ({len(actionable)})", Fore.RED))
-        for f in actionable:
-            kind = _color_tag(f["type"], Fore.YELLOW)
-            print(
-                f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
-            )
-    else:
+    if not actionable:
         print("No actionable findings after filtering privileged principals")
+        print()
+        return
+
+    for f in actionable:
+        kind = _color_tag(f["type"], Fore.YELLOW)
+        print(
+            f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
+        )
     print()
 
 

@@ -169,7 +169,7 @@ def _sev_label(sev: str) -> str:
         return _color_tag("HIGH", Fore.YELLOW)
     if sev == "medium":
         return _color_tag("MEDIUM", Fore.GREEN)
-    return _color_tag("LOW", Fore.CYAN)
+    return _color_tag("LOW", Fore.BLUE)
 
 
 RIGHT_SEVERITY = {
@@ -215,7 +215,7 @@ def color_right_name(name: str) -> str:
         return _color_tag(name, Fore.YELLOW)
     if sev == "medium":
         return _color_tag(name, Fore.GREEN)
-    return _color_tag(name, Fore.CYAN)
+    return _color_tag(name, Fore.BLUE)
 
 
 def color_action_name(name: str) -> str:
@@ -245,7 +245,7 @@ def color_action_name(name: str) -> str:
             return _color_tag(base, Fore.YELLOW)
         if sev == "medium":
             return _color_tag(base, Fore.GREEN)
-        return _color_tag(base, Fore.CYAN)
+        return _color_tag(base, Fore.BLUE)
     return name
 
 
@@ -368,7 +368,7 @@ def print_hvt(args, db: Database):
             print_user(o)
 
     if others:
-        print(_color_tag(f"\nOther ({len(others)})", Fore.CYAN))
+        print(_color_tag(f"\nOther ({len(others)})", Fore.BLUE))
         print()
         for o in others:
             print_user(o)
@@ -1071,7 +1071,7 @@ def print_ace_inheritance(args, db: Database):
         print()
 
     if args.select:
-        print(_color_tag(f"Inherited ACEs (first 10)", Fore.CYAN))
+        print(_color_tag(f"Inherited ACEs (first 10)", Fore.BLUE))
         print()
         for target, ace in inherited_aces[:10]:
             principal_sid = ace.get("PrincipalSID")
@@ -1132,7 +1132,7 @@ def print_rbcd_matrix(args, db: Database):
         print()
 
     if rbcd_sources:
-        print(_color_tag("Computers with Constrained Delegation", Fore.CYAN))
+        print(_color_tag("Computers with Constrained Delegation", Fore.BLUE))
         print()
         for source, target in rbcd_sources:
             print(f"{color1_object(source)} → can delegate to: {color1_object(target)}")
@@ -1240,7 +1240,7 @@ def print_principal_types(args, db: Database):
         print()
 
     if user_aces and args.select:
-        print(_color_tag("Users with ACL Rights (Normal)", Fore.CYAN))
+        print(_color_tag("Users with ACL Rights (Normal)", Fore.BLUE))
         print()
         for principal, target, ace in user_aces[:20]:
             right = ace.get("RightName")

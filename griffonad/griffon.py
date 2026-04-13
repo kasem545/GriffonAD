@@ -20,9 +20,28 @@ from pathlib import Path
 import griffonad
 import griffonad.lib.consts as c
 import griffonad.config
-from griffonad.lib.print import (print_path, print_paths, print_script,
-        print_groups, print_hvt, print_ous, print_desc, print_comment,
-        print_parent_paths)
+from griffonad.lib.print import (
+    print_path,
+    print_paths,
+    print_script,
+    print_groups,
+    print_hvt,
+    print_ous,
+    print_desc,
+    print_comment,
+    print_trusts,
+    print_priorities,
+    print_dacl_matrix,
+    print_adcs,
+    print_rodc,
+    print_acls,
+    print_ace_inheritance,
+    print_rbcd_matrix,
+    print_delegation_chains,
+    print_principal_types,
+    print_protected_analysis,
+    print_parent_paths,
+)
 from griffonad.lib.database import Database, Owned
 from griffonad.lib.ml import MiniLanguage
 from griffonad.lib.graph import Graph
@@ -148,12 +167,75 @@ def main():
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--sid', action='store_true', help='Show object SIDs')
     parser.add_argument('--version', action='store_true')
+    parser.add_argument(
+        '--full-groups',
+        action='store_true',
+        help='Show all group memberships (default: truncate at 10)',
+    )
+    parser.add_argument(
+        '--full-rights',
+        action='store_true',
+        help='Show all rights (default: truncate at 10 per severity)',
+    )
+    parser.add_argument('--trusts', action='store_true', help='Print domain trusts')
+    parser.add_argument(
+        '--priorities',
+        action='store_true',
+        help='Score and rank high-impact opportunities (LAPS, gMSA, DCSync, delegation)',
+    )
+    parser.add_argument('--adcs', action='store_true', help='Print ADCS ESC findings')
+    parser.add_argument('--rodc', action='store_true', help='Print RODC findings')
+    parser.add_argument(
+        '--dacl-matrix',
+        action='store_true',
+        help='Print right-to-abuse matrix per principal',
+    )
+    parser.add_argument(
+        '--acls',
+        action='store_true',
+        help='Print detailed ACL/DACL permissions (who can do what to whom)',
+    )
+    parser.add_argument(
+        '--ace-inheritance',
+        action='store_true',
+        help='Analyze explicit vs inherited ACEs (find suspicious grants)',
+    )
+    parser.add_argument(
+        '--rbcd-matrix',
+        action='store_true',
+        help='Resource-Based Constrained Delegation matrix',
+    )
+    parser.add_argument(
+        '--delegation-chains',
+        action='store_true',
+        help='Find multi-hop delegation paths to admin',
+    )
+    parser.add_argument(
+        '--principal-types',
+        action='store_true',
+        help='Analyze ACEs by principal type (identify unusual computer ACEs)',
+    )
+    parser.add_argument(
+        '--protected-analysis',
+        action='store_true',
+        help='ACL protection status for high-value objects',
+    )
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='Run all analysis flags (hvt, trusts, priorities, adcs, rodc, dacl-matrix, acls, ace-inheritance, rbcd-matrix, delegation-chains, principal-types, protected-analysis)',
+    )
 
     arg_paths = parser.add_argument_group('Paths')
     arg_paths.add_argument('--fromo', action='store_true', help='Paths from owned')
     arg_paths.add_argument('--fromv', action='store_true', help='Paths from vulnerable users (NP users (only unprotected users), password not required,  and kerberoastable users)')
     arg_paths.add_argument('--rights', action='store_true', help='With --fromo or --fromv, display rights instead of actions')
     arg_paths.add_argument('--da', action='store_true', help='Only paths to domain admin')
+    arg_paths.add_argument(
+        '--score-paths',
+        action='store_true',
+        help='Sort paths by opsec/blast score',
+    )
     arg_paths.add_argument('--from', type=str, metavar='NAME', help='Get paths from this object (user, group, ...)')
     arg_paths.add_argument('--to', type=str, metavar='NAME', help='Get paths to this object')
     parser.add_argument('-f', '--no-follow', action='store_true',
@@ -210,6 +292,9 @@ def main():
             db.load_objects(args)
             db.populate_ous()
             db.populate_groups()
+            db.set_trusts()
+            db.set_adcs()
+            db.set_rodc()
 
             if args.sysvol:
                 sysv = Sysvol(args.sysvol)
@@ -217,17 +302,14 @@ def main():
                 sysv.updatedb(db)
 
             db.propagate_admin_groups()
+            db.store_ace_metadata()
             db.propagate_aces()
             db.merge_rights()
             db.set_delegations()
             db.reverse_relations()
             db.propagate_can_admin(ml)
-            # db.reduce_aces()
             db.set_has_sessions()
-
-            if not args.desc:
-                db.prune_users()
-
+            db.prune_users()
             db.load_owned(args)
 
             diff = time.time() - t
@@ -239,6 +321,48 @@ def main():
 
     if args.graph:
         Graph(db).run()
+        exit(0)
+
+    if args.to:
+        obj = db.search_by_name(args.to)
+        if obj is None:
+            print(f"[-] error: can't find the object '{args.to}'")
+            exit(1)
+        print_parent_paths(db, obj)
+        exit(0)
+
+    if args.__dict__.get("all"):
+        args.members = True
+        args.sid = True
+        args.full_groups = True
+        args.full_rights = True
+        args.trusts = True
+        args.priorities = True
+        args.adcs = True
+        args.rodc = True
+        args.dacl_matrix = True
+        args.acls = True
+        args.ace_inheritance = True
+        args.rbcd_matrix = True
+        args.delegation_chains = True
+        args.principal_types = True
+        args.protected_analysis = True
+        print_hvt(args, db)
+        print_ous(args, db)
+        print_groups(args, db)
+        print_desc(db)
+        print_trusts(args, db)
+        print_priorities(args, db)
+        print_adcs(args, db)
+        print_rodc(args, db)
+        print_dacl_matrix(args, db)
+        print_acls(args, db)
+        print_ace_inheritance(args, db)
+        print_rbcd_matrix(args, db)
+        print_delegation_chains(args, db)
+        print_principal_types(args, db)
+        print_protected_analysis(args, db)
+        trace_stop(args)
         exit(0)
 
     if args.ous:
@@ -256,12 +380,59 @@ def main():
         trace_stop(args)
         exit(0)
 
-    if args.to:
-        obj = db.search_by_name(args.to)
-        if obj is None:
-            print(f"[-] error: can't find the object '{args.to}'")
-            exit(1)
-        print_parent_paths(db, obj)
+    if args.trusts:
+        print_trusts(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.priorities:
+        print_priorities(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.adcs:
+        print_adcs(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.rodc:
+        print_rodc(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.dacl_matrix:
+        print_dacl_matrix(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.acls:
+        print_acls(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.ace_inheritance:
+        print_ace_inheritance(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.rbcd_matrix:
+        print_rbcd_matrix(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.delegation_chains:
+        print_delegation_chains(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.principal_types:
+        print_principal_types(args, db)
+        trace_stop(args)
+        exit(0)
+
+    if args.protected_analysis:
+        print_protected_analysis(args, db)
+        trace_stop(args)
         exit(0)
 
     if not args.fromv and not args.fromo and not args.__getattribute__('from'):

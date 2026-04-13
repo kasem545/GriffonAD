@@ -2,19 +2,164 @@ import os
 import binascii
 import time
 import re
+import shutil
+import textwrap
 from colorama import Back, Fore, Style
 from jinja2 import Template, Environment, FileSystemLoader
+
+Style.STRIKE = "\033[9m"
 
 import griffonad.lib.consts as c
 import griffonad.lib.actions
 import griffonad.config
 from griffonad.lib.actions import *
-from griffonad.lib.database import Owned, Database
+from griffonad.lib.database import Owned, Database, LDAPObject
 from griffonad.lib.ml import MiniLanguage
 from griffonad.lib.utils import sanityze_symbol, password_to_nthash
 
 
 COMMENT_RE = re.compile(r'^(#.*)$', re.MULTILINE)
+
+ACTION_DETECTIONS = {
+    "::ForceChangePassword": {
+        "events": "4724, 4738",
+        "safer": "::AddKeyCredentialLink",
+    },
+    "::DCSync": {"events": "4662, 4670", "safer": "::AddKeyCredentialLink"},
+    "::AddMember": {"events": "4728, 4732, 4756", "safer": "::AddKeyCredentialLink"},
+    "::WriteSPN": {"events": "5136", "safer": "::AddKeyCredentialLink"},
+    "::EnableNP": {"events": "4738, 5136", "safer": "::Kerberoasting"},
+    "::AddKeyCredentialLink": {"events": "5136", "safer": "N/A"},
+    "::WriteGPLink": {"events": "5136", "safer": "::AddKeyCredentialLink"},
+    "::DaclFullControl": {"events": "4662, 4670", "safer": "targeted DACL right"},
+}
+
+ACTION_CLEANUP = {
+    "::AddMember": "Remove added group member and verify group ACL consistency",
+    "::WriteSPN": "Restore original SPN set on target account",
+    "::EnableNP": "Re-enable pre-auth requirement on target account",
+    "::AddKeyCredentialLink": "Delete injected KeyCredential from msDS-KeyCredentialLink",
+    "::WriteGPLink": "Remove malicious gPLink entry from target OU",
+    "::DaclFullControl": "Restore original object DACL from backup",
+    "::DaclDCSync": "Remove granted DCSync ACEs from domain root",
+    "::DaclWriteGPLink": "Remove WriteGPLink ACE from OU ACL",
+}
+
+# Well-known privileged RIDs and builtin SIDs to filter from ADCS noise.
+PRIVILEGED_RIDS: set[int] = {
+    500,  # Administrator
+    502,  # krbtgt
+    512,  # Domain Admins
+    516,  # Domain Controllers
+    517,  # Cert Publishers
+    518,  # Schema Admins
+    519,  # Enterprise Admins
+    520,  # Group Policy Creator Owners
+    521,  # Read-only Domain Controllers
+}
+
+PRIVILEGED_BUILTIN_SIDS: set[str] = {
+    "S-1-5-32-544",  # Administrators
+    "S-1-5-32-548",  # Account Operators
+    "S-1-5-32-549",  # Server Operators
+    "S-1-5-32-550",  # Print Operators
+    "S-1-5-32-551",  # Backup Operators
+    "S-1-5-9",  # Enterprise Domain Controllers
+    "S-1-5-18",  # SYSTEM / LocalSystem
+}
+
+
+def _is_privileged_principal(principal_sid: str) -> bool:
+    """Return True if the SID belongs to a well-known privileged principal."""
+    if principal_sid in PRIVILEGED_BUILTIN_SIDS:
+        return True
+    parts = principal_sid.split("-")
+    if len(parts) >= 2:
+        try:
+            rid = int(parts[-1])
+            if rid in PRIVILEGED_RIDS:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+DACL_ABUSE_MATRIX = {
+    "user": {
+        "WriteDacl": [
+            "reset-password",
+            "shadow-credentials",
+            "spn-injection",
+            "script-path-abuse",
+        ],
+        "GenericAll": ["takeover", "credential-reset", "shadow-credentials"],
+        "WriteOwner": ["become-owner-then-dacl"],
+        "Owns": ["dacl-rewrite"],
+    },
+    "computer": {
+        "WriteDacl": ["rbcd", "shadow-credentials", "full-control"],
+        "GenericAll": ["rbcd", "secretsdump-path"],
+        "WriteOwner": ["become-owner-then-dacl"],
+    },
+    "group": {
+        "WriteDacl": ["add-member", "add-self"],
+        "GenericAll": ["group-takeover"],
+        "WriteOwner": ["become-owner-then-dacl"],
+    },
+    "ou": {
+        "WriteDacl": ["write-gplink", "full-control"],
+        "GenericWrite": ["write-gplink"],
+        "WriteOwner": ["become-owner-then-dacl"],
+    },
+    "gpo": {
+        "WriteDacl": ["gpo-takeover"],
+        "GenericWrite": ["immediate-task", "logon-script", "local-admin"],
+    },
+    "domain": {
+        "WriteDacl": ["grant-dcsync", "full-control"],
+        "AllExtendedRights": ["dcsync"],
+        "GetChanges_GetChangesAll": ["dcsync"],
+    },
+    "dc": {
+        "WriteDacl": ["shadow-credentials", "full-control"],
+        "GenericWrite": ["shadow-credentials"],
+        "AdminTo": ["secretsdump-path"],
+    },
+}
+
+RIGHT_SEVERITY = {
+    "GetChanges_GetChangesAll": "critical",
+    "GetChanges_GetChangesInFilteredSet": "critical",
+    "DCSync": "critical",
+    "GenericAll": "critical",
+    "WriteDacl": "critical",
+    "WriteOwner": "critical",
+    "Owns": "critical",
+    "AllExtendedRights": "high",
+    "AdminTo": "high",
+    "AddKeyCredentialLink": "high",
+    "AllowedToAct": "high",
+    "AllowedToDelegate": "high",
+    "WriteGPLink": "high",
+    "AddMember": "high",
+    "ForceChangePassword": "high",
+    "SeBackupPrivilege": "high",
+    "ReadLAPSPassword": "medium",
+    "ReadGMSAPassword": "medium",
+    "WriteSPN": "medium",
+    "WriteUserAccountControl": "medium",
+    "SetLogonScript": "medium",
+    "HasPrivSession": "high",
+    "HasSession": "medium",
+    "SessionForUser": "low",
+    "PrivSessionForUser": "medium",
+    "TrustedDomain": "low",
+    "TrustedDomainPivot": "medium",
+    "ADCS_ESC1": "high",
+    "ADCS_ESC2": "high",
+    "ADCS_ESC3": "high",
+    "ADCS_ESC4": "high",
+}
 
 
 def color1_object(o:LDAPObject, underline=False) -> str:
@@ -66,6 +211,118 @@ def set_attr(obj, name, value):
 
 def red(s):
     return f'{Fore.RED}{s}{Style.RESET_ALL}'
+
+
+def _color_tag(text: str, color: str) -> str:
+    return f"{color}{text}{Style.RESET_ALL}"
+
+
+def _term_width() -> int:
+    try:
+        return shutil.get_terminal_size((120, 20)).columns
+    except Exception:
+        return 120
+
+
+def _wrap_items(
+    prefix: str, items: list[str], indent: int = 4, width: int | None = None
+):
+    if width is None:
+        width = _term_width()
+    if not items:
+        return
+    body = ", ".join(items)
+    initial = " " * indent + prefix
+    subsequent = " " * (indent + len(prefix))
+    for line in textwrap.wrap(
+        body, width=width, initial_indent=initial, subsequent_indent=subsequent
+    ):
+        print(line)
+
+
+def _sev_label(sev: str) -> str:
+    if sev == "critical":
+        return _color_tag("CRITICAL", Fore.RED)
+    if sev == "high":
+        return _color_tag("HIGH", Fore.YELLOW)
+    if sev == "medium":
+        return _color_tag("MEDIUM", Fore.GREEN)
+    return _color_tag("LOW", Fore.CYAN)
+
+
+def color_right_name(name: str) -> str:
+    sev = RIGHT_SEVERITY.get(name, "low")
+    if sev == "critical":
+        return _color_tag(name, Fore.RED)
+    if sev == "high":
+        return _color_tag(name, Fore.YELLOW)
+    if sev == "medium":
+        return _color_tag(name, Fore.GREEN)
+    return _color_tag(name, Fore.CYAN)
+
+
+def color_action_name(name: str) -> str:
+    if name.startswith("::"):
+        base = name
+        key = name[2:]
+        if key.startswith("ADCS_ESC") or key in ["DCSync", "DaclFullControl"]:
+            sev = "critical"
+        elif key in [
+            "AddKeyCredentialLink",
+            "ForceChangePassword",
+            "AddMember",
+            "WriteGPLink",
+            "AllowedToAct",
+            "AllowedToDelegate",
+        ]:
+            sev = "high"
+        elif key in ["ReadLAPSPassword", "ReadGMSAPassword", "WriteSPN", "EnableNP"]:
+            sev = "medium"
+        else:
+            sev = "low"
+
+        if sev == "critical":
+            return _color_tag(base, Fore.RED)
+        if sev == "high":
+            return _color_tag(base, Fore.YELLOW)
+        if sev == "medium":
+            return _color_tag(base, Fore.GREEN)
+        return _color_tag(base, Fore.CYAN)
+    return name
+
+
+_CRED_KEYWORD_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|secret|credential|token|otp"
+    r"|api[_\-]?key|private[_\-]?key|access[_\-]?key|client[_\-]?secret)\b"
+)
+
+_CRED_VALUE_RE = re.compile(
+    r"(?<!\S)(?:"
+    r"(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s.,()])[^\s]{4,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*\d)[^\s]{6,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[A-Z])(?=[^\s]*[^A-Za-z0-9\s.,()])[^\s]{6,}"
+    r"|(?=[^\s]*[A-Za-z])(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s.,()])[^\s]{6,}"
+    r"|(?=[^\s]*[A-Za-z])(?=[^\s]*\d)[^\s]{8,}"
+    r"|(?=[^\s]*\d)(?=[^\s]*[^A-Za-z0-9\s.,()])(?![^\s]*[A-Za-z])[^\s]{8,}"
+    r"|(?=[^\s]*[a-z])(?=[^\s]*[^A-Za-z0-9\s.,()])(?![^\s]*[A-Z])(?![^\s]*\d)[^\s]{8,}"
+    r"|(?=[^\s]*[A-Z])(?=[^\s]*[^A-Za-z0-9\s.,()])(?![^\s]*[a-z])(?![^\s]*\d)[^\s]{8,}"
+    r"|\d{8,}"
+    r"|[^A-Za-z0-9\s.,()]{6,}"
+    r"|[A-Za-z0-9+/]{20,}={0,2}"
+    r"|[0-9a-fA-F]{32,}"
+    r")(?!\S)"
+)
+
+
+def _highlight_creds(text: str) -> str:
+    text = _CRED_VALUE_RE.sub(
+        lambda m: f"{Fore.YELLOW}{Style.BRIGHT}{m.group()}{Style.RESET_ALL}", text
+    )
+    text = _CRED_KEYWORD_RE.sub(
+        lambda m: f"{Fore.RED}{Style.BRIGHT}{m.group()}{Style.RESET_ALL}", text
+    )
+    return text
+
 
 tmpl_path = os.path.dirname(os.path.abspath(__file__)) + '/../templates'
 env = Environment(
@@ -254,7 +511,32 @@ def print_groups(args, db:Database):
 
 
 def print_paths(args, db:Database, paths:list):
+    def score_path(path):
+        opsec = 0
+        blast = 0
+        for _, sym, target, _ in path:
+            if sym in ["::DCSync", "::DaclFullControl", "::ForceChangePassword"]:
+                opsec += 40
+                blast += 30
+            elif sym in ["::AddMember", "::WriteSPN", "::EnableNP", "::WriteGPLink"]:
+                opsec += 25
+                blast += 20
+            elif sym in [
+                "::AddKeyCredentialLink",
+                "::AllowedToAct",
+                "::AllowedToDelegate",
+            ]:
+                opsec += 15
+                blast += 15
+
+            if target is not None and getattr(target, "is_admin", False):
+                blast += 15
+
+        return opsec, blast
+
     if paths:
+        if args.score_paths:
+            paths.sort(key=lambda p: score_path(p))
         print()
         found_path_to_admin = False
         for i, p in enumerate(paths):
@@ -266,6 +548,9 @@ def print_paths(args, db:Database, paths:list):
             elif not args.da:
                 print('  ', end='')
             if not args.da or last_is_admin and args.da:
+                if args.score_paths:
+                    opsec, blast = score_path(p)
+                    print(f"[opsec={opsec:03d} blast={blast:03d}] ", end="")
                 print_path(args, p)
                 print()
     else:
@@ -299,10 +584,10 @@ def print_path(args, path:list):
 
             if args.rights:
                 if sym[:2] not in ['__', '::']:
-                    print(f'{sym},', end='')
+                    print(f'{color_right_name(sym)},', end='')
             else:
                 if sym.startswith('::') and sym[2] != '_':
-                    print(f'{sym}', end='')
+                    print(f'{color_action_name(sym)}', end='')
 
                 if req is not None:
                     print(f"[{req['class_name']}]", end='')
@@ -475,7 +760,575 @@ def print_desc(db:Database):
                     print(color2_object(o))
                 else:
                     print(color1_object(o))
-                print('   ', o.description)
+                print('   ', _highlight_creds(o.description))
+
+
+def print_trusts(args, db: Database):
+    print()
+    found = False
+    for o in db.objects_by_sid.values():
+        if o.type != c.T_DOMAIN:
+            continue
+        if not hasattr(o, "trusts") or not o.trusts:
+            continue
+        found = True
+        print(color1_object(o))
+        for tr in o.trusts:
+            target = tr["name"]
+            direction = tr["direction_name"]
+            trust_type = tr["type"]
+            transitive = "transitive" if tr["is_transitive"] else "non-transitive"
+            sid_filtering = tr["sid_filtering_enabled"]
+            if sid_filtering is None:
+                sid_filtering_txt = "SIDFiltering:unknown"
+            elif sid_filtering:
+                sid_filtering_txt = "SIDFiltering:on"
+            else:
+                sid_filtering_txt = "SIDFiltering:off"
+            print(
+                f"    -> {target} ({direction}, {trust_type}, {transitive}, {sid_filtering_txt})"
+            )
+            if tr["abuse_paths"]:
+                abuse = ", ".join(
+                    [_color_tag(a, Fore.YELLOW) for a in tr["abuse_paths"]]
+                )
+                print(f"       abuse: {abuse}")
+        print()
+
+    if not found:
+        print("No trusts found in collected data")
+        print()
+
+
+def _score_user(db: Database, o):
+    score = 0
+    reasons = []
+    laps_targets = set()
+    gmsa_targets = set()
+
+    weights = {
+        "DCSync": 120,
+        "ReadLAPSPassword": 65,
+        "ReadGMSAPassword": 60,
+        "AddKeyCredentialLink": 50,
+        "AllowedToAct": 45,
+        "AllowedToDelegate": 45,
+        "ForceChangePassword": 40,
+        "AdminTo": 35,
+        "SeBackupPrivilege": 35,
+        "WriteDacl": 28,
+        "GenericAll": 25,
+    }
+
+    for target_sid, rights in o.rights_by_sid.items():
+        target = db.objects_by_sid.get(target_sid, None)
+        target_name = target.name if target is not None else target_sid
+
+        for right in rights.keys():
+            if right in weights:
+                score += weights[right]
+                reasons.append(right)
+
+            if right == "ReadLAPSPassword":
+                laps_targets.add(target_name)
+            elif right == "ReadGMSAPassword":
+                gmsa_targets.add(target_name)
+            elif right == "HasPrivSession":
+                score += 35
+                reasons.append("PrivSession")
+            elif right == "HasSession":
+                score += 12
+                reasons.append("Session")
+
+    if o.np:
+        score += 15
+        reasons.append("ASREPRoastable")
+
+    if o.spn and o.type == c.T_USER and o.name.upper() != "KRBTGT":
+        score += 12
+        reasons.append("Kerberoastable")
+
+    if o.passwordnotreqd:
+        score += 20
+        reasons.append("BlankPassword")
+
+    return score, sorted(set(reasons)), sorted(laps_targets), sorted(gmsa_targets)
+
+
+def print_priorities(args, db: Database):
+    entries = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+        score, reasons, laps_targets, gmsa_targets = _score_user(db, o)
+        if score <= 0:
+            continue
+        entries.append((score, o, reasons, laps_targets, gmsa_targets))
+
+    entries.sort(key=lambda item: (-item[0], item[1].name.upper()))
+
+    print()
+    print("Priority score (higher means faster path to privileged creds or control)")
+    print()
+
+    if not entries:
+        print("No prioritized opportunities found")
+        print()
+        return
+
+    for i, entry in enumerate(entries[:25], 1):
+        score, o, reasons, laps_targets, gmsa_targets = entry
+        name = color1_object(o, underline=o.name.upper() in db.owned_db)
+        print(f"{i:02d}. score={score:03d} {name}")
+        if laps_targets:
+            print(
+                f"    LAPS targets ({len(laps_targets)}): {', '.join(laps_targets[:4])}"
+            )
+        if gmsa_targets:
+            print(
+                f"    gMSA targets ({len(gmsa_targets)}): {', '.join(gmsa_targets[:4])}"
+            )
+        if reasons:
+            print(f"    reasons: {', '.join(reasons[:8])}")
+        print()
+
+
+def print_dacl_matrix(args, db: Database):
+    print()
+    print("DACL abuse matrix (reachable primitives)")
+    print()
+
+    rows = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+
+        for target_sid, rights in o.rights_by_sid.items():
+            target = db.objects_by_sid.get(target_sid)
+            if target is None:
+                continue
+
+            target_type = c.ML_TYPES_TO_STR.get(target.type, "unknown")
+            matrix = DACL_ABUSE_MATRIX.get(target_type, {})
+            if not matrix:
+                continue
+
+            abuses = set()
+            used = []
+            for right in rights.keys():
+                if right in matrix:
+                    used.append(right)
+                    abuses.update(matrix[right])
+
+            if abuses:
+                rows.append((o, target, sorted(used), sorted(abuses)))
+
+    if not rows:
+        print("No DACL abuse opportunities found")
+        print()
+        return
+
+    for o, target, used, abuses in rows[:120]:
+        print(f"{color1_object(o)} -> {color1_object(target)}")
+        print(f"    rights: {', '.join([color_right_name(u) for u in used])}")
+        print(f"    abuses: {', '.join([_color_tag(a, Fore.YELLOW) for a in abuses])}")
+    print()
+
+
+def print_adcs(args, db: Database):
+    print()
+    print("ADCS abuse graph (ESC baseline)")
+    print()
+
+    if not db.adcs_templates and not db.adcs_cas:
+        print("No ADCS objects found in collected data")
+        print()
+        return
+
+    if db.adcs_cas:
+        print("Enterprise CAs")
+        for ca in sorted(db.adcs_cas.values(), key=lambda x: x["name"].upper()):
+            web = "web-enrollment" if ca["web_enrollment"] else "rpc-only"
+            enc = (
+                "encryption-required"
+                if ca["enforce_encryption_icertrequest"]
+                else "encryption-not-required"
+            )
+            print(f"  - {ca['name']} ({web}, {enc})")
+        print()
+
+    if not db.adcs_findings:
+        print("No exploitable ESC1-ESC4 findings derived from template ACLs")
+        print()
+        return
+
+    actionable = [
+        f for f in db.adcs_findings if not _is_privileged_principal(f["principal_sid"])
+    ]
+
+    if not actionable:
+        print("No actionable findings after filtering privileged principals")
+        print()
+        return
+
+    for f in actionable:
+        kind = _color_tag(f["type"], Fore.YELLOW)
+        print(
+            f"- {f['principal']} can trigger {kind} via {f['template']} ({color_right_name(f['right'])})"
+        )
+    print()
+
+
+def print_rodc(args, db: Database):
+    print()
+    print("RODC assessment")
+    print()
+
+    if not db.rodc_findings:
+        print("No RODC policy findings in collected data")
+        print()
+        return
+
+    for f in db.rodc_findings:
+        print(f"- {f['domain']}: {f['kind']}")
+        for e in f["entries"][:25]:
+            print(f"    {e}")
+    print()
+
+
+def print_acls(args, db: Database):
+    print()
+    print("ACL/DACL Permissions (who can do what to whom)")
+    print()
+
+    entries = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+
+        if not o.rights_by_sid:
+            continue
+
+        entries.append(o)
+
+    if not entries:
+        print("No ACL permissions found")
+        print()
+        return
+
+    for o in entries:
+        owned = o.name.upper() in db.owned_db
+        print(color1_object(o, underline=owned))
+
+        rights_by_sev = {
+            "critical": [],
+            "high": [],
+            "medium": [],
+            "low": [],
+        }
+
+        for target_sid, rights in o.rights_by_sid.items():
+            if target_sid == "many":
+                target_name = _color_tag("many", Fore.WHITE)
+            elif target_sid not in db.objects_by_sid:
+                target_name = _color_tag(f"UNKNOWN_{target_sid}", Fore.WHITE)
+            else:
+                target_name = color1_object(db.objects_by_sid[target_sid])
+
+            for right in rights.keys():
+                sev = RIGHT_SEVERITY.get(right, "low")
+                arg = rights[right]
+                if arg is not None:
+                    entry = f"{color_right_name(right)}({arg}) -> {target_name}"
+                else:
+                    entry = f"{color_right_name(right)} -> {target_name}"
+                rights_by_sev[sev].append(entry)
+
+        for sev in ["critical", "high", "medium", "low"]:
+            if rights_by_sev[sev]:
+                for entry in rights_by_sev[sev]:
+                    print(f"    {entry}")
+
+        print()
+
+    print()
+
+
+def print_ace_inheritance(args, db: Database):
+    print()
+    print("ACE Inheritance Analysis")
+    print()
+
+    explicit_aces = []
+    inherited_aces = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "aces_metadata"):
+            continue
+
+        for ace in o.aces_metadata:
+            if ace["IsInherited"]:
+                inherited_aces.append((o, ace))
+            else:
+                explicit_aces.append((o, ace))
+
+    suspicious_explicit = []
+    for target, ace in explicit_aces:
+        principal_sid = ace.get("PrincipalSID")
+        if principal_sid not in db.objects_by_sid:
+            continue
+
+        principal = db.objects_by_sid[principal_sid]
+        right = ace.get("RightName")
+
+        if right in ["GenericAll", "WriteDacl", "WriteOwner", "Owns"]:
+            if principal.type == c.T_USER and not principal.is_admin:
+                suspicious_explicit.append((principal, target, ace))
+            elif principal.type == c.T_COMPUTER:
+                suspicious_explicit.append((principal, target, ace))
+
+    if suspicious_explicit:
+        print(_color_tag("Suspicious Explicit ACE Grants", Fore.RED))
+        print()
+        for principal, target, ace in suspicious_explicit[:50]:
+            right = ace.get("RightName")
+            principal_type = ace.get("PrincipalType", "Unknown")
+            print(
+                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)}, explicit, {principal_type})"
+            )
+            if principal.type == c.T_COMPUTER:
+                print(f"    Computer with explicit ACE (unusual)")
+            elif target.type == c.T_DOMAIN:
+                print(f"    Explicit grant on domain object")
+            elif target.is_admin or target.can_admin:
+                print(f"    Explicit grant on admin/path-to-admin object")
+        print()
+    else:
+        print("No suspicious explicit ACE grants found")
+        print()
+
+    if args.select:
+        print(_color_tag(f"Inherited ACEs (first 10)", Fore.CYAN))
+        print()
+        for target, ace in inherited_aces[:10]:
+            principal_sid = ace.get("PrincipalSID")
+            if principal_sid not in db.objects_by_sid:
+                continue
+            principal = db.objects_by_sid[principal_sid]
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)}, inherited)"
+            )
+        print()
+
+
+def print_rbcd_matrix(args, db: Database):
+    print()
+    print("Resource-Based Constrained Delegation Matrix")
+    print()
+
+    rbcd_targets = []
+    rbcd_sources = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "bloodhound_json"):
+            continue
+
+        allowed_to_act = o.bloodhound_json.get("AllowedToAct", [])
+        if allowed_to_act:
+            for delegator in allowed_to_act:
+                delegator_sid = delegator.get("ObjectIdentifier")
+                if delegator_sid in db.objects_by_sid:
+                    delegator_obj = db.objects_by_sid[delegator_sid]
+                    rbcd_targets.append((o, delegator_obj))
+
+        allowed_to_delegate = o.bloodhound_json.get("AllowedToDelegate", [])
+        if allowed_to_delegate:
+            for target in allowed_to_delegate:
+                target_sid = target.get("ObjectIdentifier")
+                if target_sid in db.objects_by_sid:
+                    target_obj = db.objects_by_sid[target_sid]
+                    rbcd_sources.append((o, target_obj))
+
+    if rbcd_targets:
+        print(
+            _color_tag("Computers Allowing Delegation FROM Others (RBCD)", Fore.YELLOW)
+        )
+        print()
+        for target, delegator in rbcd_targets:
+            print(
+                f"{color1_object(target)} <- allows delegation from: {color1_object(delegator)}"
+            )
+            if not delegator.is_admin and delegator.type == c.T_USER:
+                print(f"    Non-admin user can delegate (exploitable!)")
+            elif delegator.type == c.T_COMPUTER and not delegator.is_admin:
+                print(f"    Non-admin computer can delegate")
+        print()
+    else:
+        print("No RBCD configurations found")
+        print()
+
+    if rbcd_sources:
+        print(_color_tag("Computers with Constrained Delegation", Fore.CYAN))
+        print()
+        for source, target in rbcd_sources:
+            print(f"{color1_object(source)} -> can delegate to: {color1_object(target)}")
+        print()
+
+
+def print_delegation_chains(args, db: Database):
+    print()
+    print("Delegation Chain Analysis")
+    print()
+
+    chains = []
+
+    for o in db.objects_by_sid.values():
+        if o.type not in [c.T_USER, c.T_COMPUTER]:
+            continue
+
+        if not o.rights_by_sid:
+            continue
+
+        path = []
+        current = o
+
+        for target_sid, rights in current.rights_by_sid.items():
+            if target_sid not in db.objects_by_sid:
+                continue
+
+            target = db.objects_by_sid[target_sid]
+
+            if "AllowedToDelegate" in rights or "AllowedToAct" in rights:
+                path.append((current, target, "delegation"))
+
+                if target.unconstraineddelegation and target.is_admin:
+                    path.append((target, None, "unconstrained-to-DA"))
+                    chains.append(path)
+                    break
+
+                if target.is_admin:
+                    chains.append(path)
+                    break
+
+    if chains:
+        print(_color_tag(f"Delegation Chains to Admin ({len(chains)})", Fore.RED))
+        print()
+        for i, chain in enumerate(chains[:20], 1):
+            print(f"{i}. ", end="")
+            for j, (source, target, chain_type) in enumerate(chain):
+                if j > 0:
+                    print(" -> ", end="")
+                print(f"{color1_object(source)}", end="")
+                if target:
+                    print(f" ({chain_type})", end="")
+            print()
+            if chain[-1][2] == "unconstrained-to-DA":
+                print(f"    Ends at unconstrained delegation (high risk)")
+            print()
+    else:
+        print("No delegation chains to admin found")
+        print()
+
+
+def print_principal_types(args, db: Database):
+    print()
+    print("ACE Analysis by Principal Type")
+    print()
+
+    computer_aces = []
+    user_aces = []
+    group_aces = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "aces_metadata"):
+            continue
+
+        for ace in o.aces_metadata:
+            principal_sid = ace.get("PrincipalSID")
+            if principal_sid not in db.objects_by_sid:
+                continue
+
+            principal = db.objects_by_sid[principal_sid]
+            right = ace.get("RightName")
+
+            if right in ["GenericAll", "WriteDacl", "WriteOwner", "Owns"]:
+                if principal.type == c.T_COMPUTER:
+                    computer_aces.append((principal, o, ace))
+                elif principal.type == c.T_USER:
+                    user_aces.append((principal, o, ace))
+                elif principal.type == c.T_GROUP:
+                    group_aces.append((principal, o, ace))
+
+    if computer_aces:
+        print(_color_tag("Computers with ACL Rights (Unusual)", Fore.RED))
+        print()
+        for principal, target, ace in computer_aces[:30]:
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)})"
+            )
+            print(
+                f"    Computers rarely need ACL rights - possible misconfiguration"
+            )
+        print()
+    else:
+        print("No computer principals with dangerous ACL rights")
+        print()
+
+    if user_aces and args.select:
+        print(_color_tag("Users with ACL Rights (Normal)", Fore.CYAN))
+        print()
+        for principal, target, ace in user_aces[:20]:
+            right = ace.get("RightName")
+            print(
+                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)})"
+            )
+        print()
+
+
+def print_protected_analysis(args, db: Database):
+    print()
+    print("ACL Protection Status Analysis")
+    print()
+
+    protected_objects = []
+    unprotected_hvt = []
+
+    for o in db.objects_by_sid.values():
+        if not hasattr(o, "bloodhound_json"):
+            continue
+
+        is_protected = o.bloodhound_json.get("IsACLProtected", False)
+
+        if is_protected:
+            protected_objects.append(o)
+        elif o.is_admin or o.type == c.T_DOMAIN:
+            unprotected_hvt.append(o)
+
+    if protected_objects:
+        print(_color_tag(f"Protected Objects ({len(protected_objects)})", Fore.GREEN))
+        print()
+        for o in protected_objects[:20]:
+            print(f"  {color1_object(o)} (ACL inheritance disabled)")
+        print()
+    else:
+        print("No ACL-protected objects found")
+        print()
+
+    if unprotected_hvt:
+        print(
+            _color_tag(
+                f"Unprotected High-Value Objects ({len(unprotected_hvt)})", Fore.RED
+            )
+        )
+        print()
+        for o in unprotected_hvt[:20]:
+            print(f"  {color1_object(o)} (vulnerable to OU-level inheritance)")
+        print()
+    else:
+        print("All high-value objects are ACL-protected")
+        print()
 
 
 def print_parent_paths(db:Database, obj:LDAPObject):

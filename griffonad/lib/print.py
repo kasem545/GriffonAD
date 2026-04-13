@@ -336,28 +336,32 @@ env.filters['red'] = red
 # High value targets
 def print_hvt(args, db:Database):
     print()
-    print(f'{Fore.RED}♦USER{Style.RESET_ALL} the user is an admin')
-    print(f'{Fore.YELLOW}★USER{Style.RESET_ALL} there is a path to gain admin privileges')
-    print(f'{Style.UNDERLINE}USER{Style.RESET_ALL} the user is owned')
-    print(f'{Style.STRIKE}USER{Style.RESET_ALL} the user is disabled')
-    print(f'{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn\'t tell that the user is an admin, it could be an old admin)')
-    print(f'{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)')
-    print(f'{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)')
-    print(f'{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group')
-    print(f'{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)')
-    print(f'{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE')
-    print(f'{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)')
-    print(f'{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD')
+    print(
+        f"{Fore.RED}♦{Style.RESET_ALL} admin | {Fore.YELLOW}★{Style.RESET_ALL} path-to-admin | {Style.UNDERLINE}owned{Style.RESET_ALL}"
+    )
+    print()
+    print("badges:")
+    print(
+        f"{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn't tell that the user is an admin, it could be an old admin)"
+    )
+    print(
+        f"{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)"
+    )
+    print(f"{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)")
+    print(f"{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group")
+    print(
+        f"{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)"
+    )
+    print(f"{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE")
+    print(
+        f"{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)"
+    )
+    print(f"{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD")
     print()
 
-    for o in db.iter_users():
-        if args.select and not o.name.upper().startswith(args.select.upper()):
-            continue
-
-        if o.name.upper() in db.owned_db:
-            print(color1_object(o, underline=True), end='')
-        else:
-            print(color1_object(o), end='')
+    def print_user(o):
+        owned = o.name.upper() in db.owned_db
+        print(color1_object(o, underline=owned), end='')
 
         if o.admincount:
             print(f'{Fore.GREEN} A{Style.RESET_ALL}', end='')
@@ -377,39 +381,73 @@ def print_hvt(args, db:Database):
             print(f'{Fore.GREEN} !X{Style.RESET_ALL}', end='')
 
         if args.sid:
-            print(f' {Fore.BLACK}{o.sid}{Style.RESET_ALL}', end='')
+            print(f' {Fore.WHITE}{o.sid}{Style.RESET_ALL}', end='')
 
         print()
 
         if not o.can_admin and not o.is_admin:
             for sid, rights in o.rights_by_sid.items():
                 if 'RestrictedGroups' in rights:
-                    print(f'    {Fore.BLACK}This user may be interesting. RestrictedGroups have not been{Style.RESET_ALL}')
-                    print(f'    {Fore.BLACK}propagated to determine if the user can become an admin.{Style.RESET_ALL}')
+                    print(
+                        f'    {Fore.WHITE}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}'
+                    )
                     break
 
         for sid in o.group_sids:
             if sid == 'many':
-                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
+                name = 'many'
             elif sid not in db.objects_by_sid:
                 name = f'UNKNOWN_{sid}'
             else:
                 name = color1_object(db.objects_by_sid[sid])
-            print(f'    {Fore.BLACK}<{Style.RESET_ALL} {name}')
+            print(f'    < {name}')
 
         for sid, rights in o.rights_by_sid.items():
             if sid == 'many':
-                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
+                target_name = 'many'
             elif sid not in db.objects_by_sid:
-                name = f'UNKNOWN_{sid}'
+                target_name = f'UNKNOWN_{sid}'
             else:
-                o = db.objects_by_sid[sid]
-                name = color1_object(db.objects_by_sid[sid])
-            for i, r in enumerate(rights.keys()):
+                target_name = color1_object(db.objects_by_sid[sid])
+            for r in rights.keys():
                 if rights[r] is not None:
-                    print(f'    {r}({rights[r]} -> {name})')
+                    print(f'    {color_right_name(r)}({rights[r]} -> {target_name})')
                 else:
-                    print(f'    {r}({name})')
+                    print(f'    {color_right_name(r)}({target_name})')
+
+        print()
+
+    admins = []
+    pivots = []
+    others = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+        if o.is_admin:
+            admins.append(o)
+        elif o.can_admin:
+            pivots.append(o)
+        else:
+            others.append(o)
+
+    if admins:
+        print(_color_tag(f'Admins ({len(admins)})', Fore.RED))
+        print()
+        for o in admins:
+            print_user(o)
+
+    if pivots:
+        print(_color_tag(f'\nPaths-to-admin ({len(pivots)})', Fore.YELLOW))
+        print()
+        for o in pivots:
+            print_user(o)
+
+    if others:
+        print(_color_tag(f'\nOther ({len(others)})', Fore.CYAN))
+        print()
+        for o in others:
+            print_user(o)
+
     print()
 
 
@@ -432,7 +470,7 @@ def print_ous(args, db:Database):
         print(ou.dn, end='')
 
         if args.sid:
-            print(f' {Fore.BLACK}{ou.sid}{Style.RESET_ALL}', end='')
+            print(f' {Fore.WHITE}{ou.sid}{Style.RESET_ALL}', end='')
 
         print()
 
@@ -481,7 +519,7 @@ def print_groups(args, db:Database):
         print(f'{color1_object(g)}', end='')
 
         if args.sid:
-            print(f' {Fore.BLACK}{g.sid}{Style.RESET_ALL}', end='')
+            print(f' {Fore.WHITE}{g.sid}{Style.RESET_ALL}', end='')
 
         print()
 
@@ -493,16 +531,16 @@ def print_groups(args, db:Database):
 
         for sid, rights in g.rights_by_sid.items():
             if sid == 'many':
-                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
+                name = 'many'
             elif sid not in db.objects_by_sid:
                 name = f'UNKNOWN_{sid}'
             else:
                 name = color1_object(db.objects_by_sid[sid])
             for i, r in enumerate(rights.keys()):
                 if rights[r] is not None:
-                    print(f'    {r}({rights[r]} -> {name})')
+                    print(f'    ({color_right_name(r)}, {rights[r]} -> {name})')
                 else:
-                    print(f'    {r}({name})')
+                    print(f'    ({color_right_name(r)}, {name})')
 
     if args.select and not printed:
         print('This group may not have interesting rights')

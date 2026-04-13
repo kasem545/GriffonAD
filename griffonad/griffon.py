@@ -8,6 +8,7 @@ import json
 from colorama import init as colorama_init
 from colorama import Style
 Style.UNDERLINE = '\033[4m'
+Style.STRIKE = '\033[9m'
 
 import os
 import argparse
@@ -20,7 +21,8 @@ import griffonad
 import griffonad.lib.consts as c
 import griffonad.config
 from griffonad.lib.print import (print_path, print_paths, print_script,
-        print_groups, print_hvt, print_ous, print_desc, print_comment)
+        print_groups, print_hvt, print_ous, print_desc, print_comment,
+        print_parent_paths)
 from griffonad.lib.database import Database, Owned
 from griffonad.lib.ml import MiniLanguage
 from griffonad.lib.graph import Graph
@@ -35,11 +37,11 @@ def extract_bloodhound_zip(zip_path:str) -> tuple:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             for member in zip_ref.namelist():
                 if member.startswith('/') or '..' in member:
-                    raise Exception(f"Unsafe zip path detected: {member}")
+                    raise Exception(f'Unsafe zip path detected: {member}')
 
             total_size = sum(info.file_size for info in zip_ref.infolist())
             if total_size > 500 * 1024 * 1024:
-                raise Exception(f"Zip too large: {total_size} bytes (500MB limit)")
+                raise Exception(f'Zip too large: {total_size} bytes (500MB limit)')
 
             zip_ref.extractall(temp_dir)
 
@@ -51,7 +53,7 @@ def extract_bloodhound_zip(zip_path:str) -> tuple:
         return json_files, temp_dir
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        raise Exception(f"Failed to extract {zip_path}: {e}")
+        raise Exception(f'Failed to extract {zip_path}: {e}')
 
 
 def process_input_files(filenames:list) -> tuple:
@@ -62,7 +64,7 @@ def process_input_files(filenames:list) -> tuple:
         filepath_obj = Path(filepath)
 
         if not filepath_obj.exists():
-            print(f"[-] error: file not found: {filepath}")
+            print(f'[-] error: file not found: {filepath}')
             continue
 
         if filepath_obj.suffix.lower() == '.zip':
@@ -73,14 +75,14 @@ def process_input_files(filenames:list) -> tuple:
                 temp_dirs.append(temp_dir)
                 print(f'[+] found {len(extracted_jsons)} JSON files in zip')
             except Exception as e:
-                print(f"[-] {e}")
+                print(f'[-] {e}')
         elif filepath_obj.suffix.lower() == '.json':
             json_files.append(str(filepath_obj))
         else:
-            print(f"[-] warning: unsupported file type: {filepath}")
+            print(f'[-] warning: unsupported file type: {filepath}')
 
     if not json_files:
-        print("[-] error: no JSON files found to process")
+        print('[-] error: no JSON files found to process')
 
     return json_files, temp_dirs
 
@@ -93,7 +95,7 @@ def trace_stop(args):
     if args.debug:
         first_size, first_peak = tracemalloc.get_traced_memory()
 
-        print("[ Memory ]")
+        print('[ Memory ]')
         print(f'peak: {first_peak//1024//1024} MiB')
         print(f'memory: {first_size//1024//1024} MiB')
         print()
@@ -104,15 +106,15 @@ def trace_stop(args):
         snapshot = tracemalloc.take_snapshot()
 
         snapshot = snapshot.filter_traces((
-            tracemalloc.Filter(False, "<frozen importlib._bootstrap>"),
-            tracemalloc.Filter(False, "<unknown>"),
+            tracemalloc.Filter(False, '<frozen importlib._bootstrap>'),
+            tracemalloc.Filter(False, '<unknown>'),
         ))
         top_stats = snapshot.statistics(key_type)
 
-        print("[ Top 10 ]")
+        print('[ Top 10 ]')
         for index, stat in enumerate(top_stats[:limit], 1):
             frame = stat.traceback[0]
-            print("#%s: %s:%s: %.1f KiB"
+            print('#%s: %s:%s: %.1f KiB'
                   % (index, frame.filename, frame.lineno, stat.size / 1024))
             line = linecache.getline(frame.filename, frame.lineno).strip()
             if line:
@@ -121,7 +123,7 @@ def trace_stop(args):
         other = top_stats[limit:]
         if other:
             size = sum(stat.size for stat in other)
-            print("%s other: %.1f KiB" % (len(other), size / 1024))
+            print('%s other: %.1f KiB' % (len(other), size / 1024))
 
         print()
 
@@ -130,9 +132,6 @@ def trace_stop(args):
 
 def main():
     colorama_init()
-
-    print('GriffonAD 0.6.10')
-    print()
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('filename', nargs='*')
@@ -148,13 +147,15 @@ def main():
     parser.add_argument('--sysvol', metavar='PATH', type=str, help='Analyze GPOs')
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--sid', action='store_true', help='Show object SIDs')
+    parser.add_argument('--version', action='store_true')
 
     arg_paths = parser.add_argument_group('Paths')
     arg_paths.add_argument('--fromo', action='store_true', help='Paths from owned')
     arg_paths.add_argument('--fromv', action='store_true', help='Paths from vulnerable users (NP users (only unprotected users), password not required,  and kerberoastable users)')
     arg_paths.add_argument('--rights', action='store_true', help='With --fromo or --fromv, display rights instead of actions')
     arg_paths.add_argument('--da', action='store_true', help='Only paths to domain admin')
-    arg_paths.add_argument('--from', type=str, metavar='USER', help='Get paths from this user')
+    arg_paths.add_argument('--from', type=str, metavar='NAME', help='Get paths from this object (user, group, ...)')
+    arg_paths.add_argument('--to', type=str, metavar='NAME', help='Get paths to this object')
     parser.add_argument('-f', '--no-follow', action='store_true',
             help='Don\'t try to continue on owned targets but display all available scenarios for one target')
 
@@ -163,6 +164,11 @@ def main():
     arg_script.add_argument('--dc-ip', type=str, default='DC_IP', metavar='DC_IP')
 
     args = parser.parse_args()
+
+    if args.version:
+        print('GriffonAD 0.6.19')
+        print('https://github.com/shellinvictus/GriffonAD')
+        exit(0)
 
     trace_start(args)
 
@@ -218,7 +224,10 @@ def main():
             db.propagate_can_admin(ml)
             # db.reduce_aces()
             db.set_has_sessions()
-            db.prune_users()
+
+            if not args.desc:
+                db.prune_users()
+
             db.load_owned(args)
 
             diff = time.time() - t
@@ -245,6 +254,14 @@ def main():
     if args.desc:
         print_desc(db)
         trace_stop(args)
+        exit(0)
+
+    if args.to:
+        obj = db.search_by_name(args.to)
+        if obj is None:
+            print(f"[-] error: can't find the object '{args.to}'")
+            exit(1)
+        print_parent_paths(db, obj)
         exit(0)
 
     if not args.fromv and not args.fromo and not args.__getattribute__('from'):

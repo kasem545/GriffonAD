@@ -43,7 +43,7 @@ class LDAPObject():
         self.protected = False # in protected users group
         self.group_rids = set() # list of groups this object belongs
         self.group_sids = set() # list of groups this object belongs
-        self.gpo_links_to_ou = [] # only for GPO, it contains the ou dn 
+        self.gpo_links_to_ou = [] # only for GPO, it contains the ou dn
         self.from_domain = o['Properties']['domain']
 
         # Arg is most of the time set to None, it's useful for right=AllowedToDelegate,
@@ -70,7 +70,8 @@ class LDAPObject():
             self.rid = 0
         elif self.type == c.T_GPO:
             self.gpo_dirname_id = '{' + self.dn.split('{')[1].split('}')[0] + '}'
-            self.name = self.gpo_dirname_id + '[' + o['Properties']['name'] + ']'
+            name = o['Properties']['name']
+            self.name = self.gpo_dirname_id + '[' + o['Properties']['name'].split('@')[0] + ']'
             self.rid = 0
         elif self.type == c.T_CONTAINER or self.type == c.T_OU:
             self.rid = 0
@@ -83,6 +84,7 @@ class LDAPObject():
                 self.name = o['Properties']['name'].split('@')[0]
 
         self.is_krbtgt = self.name.upper() == 'KRBTGT'
+        self.is_gmsa = self.type == c.T_USER and self.name.endswith('$')
 
     def __str__(self):
         return self.name
@@ -119,6 +121,7 @@ class FakeLDAPObject(LDAPObject):
         self.description = ''
         self.enabled = True
         self.from_domain = ''
+        self.is_gmsa = False
 
     def __str__(self):
         return self.name
@@ -170,7 +173,7 @@ class Database():
                 print(f"[-] error: can't find the object '{line[0]}' in the file owned")
                 exit(1)
 
-            if obj.type == c.T_COMPUTER:
+            if obj.type == c.T_COMPUTER and c.MAP_SECRET_TYPE[line[1]] == c.T_SECRET_PASSWORD:
                 self.owned_db[obj.name.upper()] = Owned(obj,
                     secret=get_aes_256_from_hex(self.domain.name, obj.name, line[2]),
                     secret_type=c.T_SECRET_AESKEY,
@@ -185,6 +188,10 @@ class Database():
     def __load_json(self, filename:str):
         data = json.load(open(filename, 'r'))
         objects = data['data']
+        meta_type = data['meta']['type']
+        if meta_type not in c.BH_OBJECT_TYPE:
+            print(f'[!] skipping unknown object type: {meta_type}')
+            return
         type = c.BH_OBJECT_TYPE[data['meta']['type']]
         for o_json in objects:
             sid = o_json['ObjectIdentifier']
@@ -408,16 +415,6 @@ class Database():
             f'{self.domain.sid}-527', # Enterprise key admins
             f'{self.domain.sid}-526', # Key admins
         ]
-
-        # Backup operators
-        # Just add the SeBackupPrivilege to simplify
-        sid = f'{self.domain.name}-S-1-5-32-551'
-        if sid in self.objects_by_sid:
-            self.objects_by_sid[sid].\
-                rights_by_sid['many'] = {
-                    'SeBackupPrivilege': None,
-                    # 'SeRestorePrivilege': None,
-                }
 
         # Remote desktop users
         sid = f'{self.domain.name}-S-1-5-32-555'
@@ -651,9 +648,9 @@ class Database():
         # iter_users sorts by names before
         for sid in self.users:
             o = self.objects_by_sid[sid]
-            if not o.enabled:
+            if not o.enabled and not o.rights_by_sid and o.sid not in self.parents:
                 to_remove.append(o.sid)
-            elif not (o.rights_by_sid or o.np or (o.spn and o.type == c.T_USER) or \
+            elif o.enabled and not (o.rights_by_sid or o.np or (o.spn and o.type == c.T_USER) or \
                     o.is_admin or o.trustedtoauth or o.passwordnotreqd):
                 to_remove.append(o.sid)
         for sid in to_remove:

@@ -16,11 +16,14 @@ from griffonad.lib.utils import sanityze_symbol, password_to_nthash
 
 COMMENT_RE = re.compile(r'^(#.*)$', re.MULTILINE)
 
+
 def color1_object(o:LDAPObject, underline=False) -> str:
     if o is None:
         return 'many'
     if underline:
         u = Style.UNDERLINE
+    elif o.type == c.T_USER and not o.enabled:
+        u = Style.STRIKE
     else:
         u = ''
     sid = o.sid.replace(o.from_domain + '-', '')
@@ -35,11 +38,14 @@ def color1_object(o:LDAPObject, underline=False) -> str:
     return f'{u}{name}{Style.RESET_ALL}'
 
 
+# color in green if we are in the default case
 def color2_object(o:LDAPObject, underline=False) -> str:
     if o is None:
         return 'many'
     if underline:
         u = Style.UNDERLINE
+    elif o.type == c.T_USER and not o.enabled:
+        u = Style.STRIKE
     else:
         u = ''
     if o.sid in c.BUILTIN_SID:
@@ -76,6 +82,7 @@ def print_hvt(args, db:Database):
     print(f'{Fore.RED}♦USER{Style.RESET_ALL} the user is an admin')
     print(f'{Fore.YELLOW}★USER{Style.RESET_ALL} there is a path to gain admin privileges')
     print(f'{Style.UNDERLINE}USER{Style.RESET_ALL} the user is owned')
+    print(f'{Style.STRIKE}USER{Style.RESET_ALL} the user is disabled')
     print(f'{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn\'t tell that the user is an admin, it could be an old admin)')
     print(f'{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)')
     print(f'{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)')
@@ -126,7 +133,7 @@ def print_hvt(args, db:Database):
 
         for sid in o.group_sids:
             if sid == 'many':
-                name = 'many'
+                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
             elif sid not in db.objects_by_sid:
                 name = f'UNKNOWN_{sid}'
             else:
@@ -135,10 +142,11 @@ def print_hvt(args, db:Database):
 
         for sid, rights in o.rights_by_sid.items():
             if sid == 'many':
-                name = f'{Fore.RED}many{Style.RESET_ALL}'
+                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
             elif sid not in db.objects_by_sid:
                 name = f'UNKNOWN_{sid}'
             else:
+                o = db.objects_by_sid[sid]
                 name = color1_object(db.objects_by_sid[sid])
             for i, r in enumerate(rights.keys()):
                 if rights[r] is not None:
@@ -228,7 +236,7 @@ def print_groups(args, db:Database):
 
         for sid, rights in g.rights_by_sid.items():
             if sid == 'many':
-                name = f'{Fore.RED}many{Style.RESET_ALL}'
+                name = f'{Fore.BLACK}many{Style.RESET_ALL}'
             elif sid not in db.objects_by_sid:
                 name = f'UNKNOWN_{sid}'
             else:
@@ -364,14 +372,19 @@ def print_script(args, db:Database, path:list):
     last_parent = None
 
     previous_action = ''
+    original_target = None
 
     for parent, symbol, target, require in path:
+        if original_target is None:
+            original_target = target
 
         if last_target is not None and target is not None and \
                 target.name != last_target.name:
             print(f'{Fore.YELLOW}{last_target.name} is owned{Style.RESET_ALL}')
             print(f'{Fore.YELLOW}Next target is {target.name}{Style.RESET_ALL}')
             print()
+            if last_parent != parent:
+                original_target = target
 
         if target is not None and last_target is not None and \
                 last_target.sid != target.sid and target.sid in db.users:
@@ -423,6 +436,7 @@ def print_script(args, db:Database, path:list):
             v = {
                 'previous_action': previous_action,
                 'require': require,
+                'original_target': original_target,
             }
 
             if parent is not None:
@@ -462,3 +476,34 @@ def print_desc(db:Database):
                 else:
                     print(color1_object(o))
                 print('   ', o.description)
+
+
+def print_parent_paths(db:Database, obj:LDAPObject):
+    def __rec(sid, path):
+        if sid not in db.parents:
+            l = []
+            for sid in path:
+                o = db.objects_by_sid[sid]
+                underline = o.name.upper() in db.owned_db
+                l.append(color1_object(o, underline=underline))
+            print(' —> '.join(l))
+            return
+        for par in db.parents[sid]:
+            if par not in path:
+                copy = list(path)
+                copy.insert(0, par)
+                __rec(par, copy)
+
+    print()
+
+    if obj.sid in [f'{db.domain.sid}', f'{db.main_dc.sid}'] and 'many' in db.parents:
+        path = [obj.sid]
+        for par in db.parents['many']:
+            if par not in path:
+                copy = list(path)
+                copy.insert(0, par)
+                __rec(par, copy)
+
+    __rec(obj.sid, [obj.sid])
+
+    print()

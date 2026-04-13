@@ -20,7 +20,8 @@ REGEX_PREDICATE = re.compile(
 REGEX_SET = re.compile(
     r'^\s*set\s+(?P<varname>[a-zA-Z0-9_]+)' + \
     r'\s*=\s*' + \
-    r'(?P<bool>true|false)$')
+    r'(?P<value>true|false|[0-9]+|"(?:\\.|[^"\\])*")\s*' + \
+    r'\s*(?P<comment>#.+)?$')
 
 
 def index(list, search):
@@ -117,7 +118,7 @@ class MiniLanguage():
             c.T_CONTAINER: set(),
         }
         self.args = args
-        self.args.consts = {}
+        self.args.variables = {}
 
 
     def __parse_file(self, filename):
@@ -144,7 +145,12 @@ class MiniLanguage():
 
             res = REGEX_SET.match(line)
             if res is not None:
-                self.args.consts[res['varname']] = res['bool'] == 'true'
+                v = None
+                if res['value'] == 'true': v = True
+                elif res['value'] == 'false': v = True
+                elif res['value'][0] == '"': v = res['value'][1:-1]
+                else: v = int(res['value'])
+                self.args.variables[res['varname']] = v
                 continue
 
             res = REGEX_PREDICATE.match(line)
@@ -157,6 +163,13 @@ class MiniLanguage():
 
             if object_type != 'any' and object_type not in c.ML_TYPES_FROM_STR:
                 print(f'{filename}: unknown object type at line {n}')
+                print(line)
+                exit(1)
+
+            if res['require_class_name'] and \
+                    not res['symbol'].startswith('::') and \
+                    res['require_suffix'] != '_targets':
+                print(f'{filename}: you cannot set a require|require_once|require_for_auth on an action (prefixed with ::)')
                 print(line)
                 exit(1)
 
@@ -242,7 +255,7 @@ class MiniLanguage():
     def execute_function(self, db, target, action):
         paths = []
         funcname = f'{c.ML_TYPES_TO_STR[target.type]}_{action.replace("::", "xx")}'
-        code = self.code + f'\n{funcname}(args, set(), None, target)'
+        code = self.code + f'\n{funcname}(args, set(), None, set(), target)'
         exec(code, {
             'args': self.args,
             'target': target,

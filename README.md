@@ -1,7 +1,7 @@
 GriffonAD
 =========
 
-![griffon version](/griffonad/assets/version-0.6.10.svg?raw=true)
+![griffon version](/griffonad/assets/version-0.6.19.svg?raw=true)
 ![gpl](/griffonad/assets/gpl.svg?raw=true)
 ![offsec](/griffonad/assets/offsec.svg?raw=true)
 ![python](/griffonad/assets/python.svg?raw=true)
@@ -10,17 +10,26 @@ Generate low-level commands (mainly impacket) to exploit the Active
 Directory easily: learn and control every steps. Griffon supports many
 scenarios, take a look into [config.ml](griffonad/config.ml) !
 
+[![asciicast](https://asciinema.org/a/860452.svg)](https://asciinema.org/a/860452)
+
 Challenge
 ---------
 
 You can play with Griffon by installing a vulnerable AD: [lab](/lab/README.md).
 
+Write-ups are here on the [wiki](https://github.com/shellinvictus/GriffonAD/wiki).
+
 
 Installation
 ============
 
+<details>
+    
+<summary>Installation</summary>
+
 You will need the latest version of impacket to use dacledit.py on some
 scenarios of GriffonAD. The expected commit is fortra/impacket@bf2d749f49588183b7aee732276440fe018a417d.
+
 
 ## Installing with Venv
 
@@ -43,11 +52,13 @@ Make sure your current working directory is inside GriffonAD then run:
 
 ## Uninstalling GriffonAD with pipx
     pipx uninstall griffon
+</details>
+
 
 4 steps to Domain Admin
 =======================
 
-![steps](/griffonad/assets/steps.svg?raw=true)
+<img alt="steps" src="/griffonad/assets/steps.svg?raw=true" width="500">
 
 Step 1
 ------
@@ -55,6 +66,7 @@ Step 1
 Retrieve Bloodhound json files with a collector (untested with SharpHound):
 
     ./bloodhound.py -u USER -d DOMAIN -p PASSWORD -ns DNS_IP -c DCOnly
+
 
 Step 2: ACLs analysis
 ---------------------
@@ -66,10 +78,8 @@ sounds good!
     or
     griffon bloodhound.zip
 
-- yellow user = can become an admin
+- yellow user = a path to domain admin exists
 - red user = an admin
-
-![rights](/griffonad/assets/hvt.png?raw=true)
 
 Other options:
 
@@ -78,6 +88,10 @@ Other options:
 - `--ous`: display all ous with their gpo links (+ `--members`)
 - `--graph`: open a js graph to view relations between objects
 - `--sysvol PATH`: search for local members (Backup Operators and Administrators) and local privileges
+- `--desc`: display object descriptions
+
+<details>
+<summary>More on --sysvol</summary>
 
 > [!NOTE]
 > Example on how Griffon displays the information with `--sysvol`:
@@ -95,20 +109,24 @@ Other options:
 >
 >     echo -e "recurse\nprompt\nmget *" | smbclient -U 'DOMAIN/USER%PASSWORD' '\\IP\SYSVOL'
 
-![graph](/griffonad/assets/graph.png?raw=true)
+</details>
 
-> [!TIP]
+<details>
+<summary>More on the `many` target</summary>
+
+> [!NOTE]
 > About the `many` target: it means that you can have multiple targets.
 > It depends of the right you have:
 > 
-> - `GenericAll`: on all users and groups with admincount=0 if the user is in the Account
-> Operators group
-> - `AddKeyCredentialLink`: on all users with admincount=0 if the user is in the Key Admins group
-> - `AllowedToDelegate`: means an unconstrained delegation
-> - `SeBackupPrivilege`: can access to DC/C$ (`FIXME` theorically also on all computers, does it requires RDP?)
+> - `GenericAll` = user is in the Account Operators group
+> - `AddKeyCredentialLink`: user is in the Key Admins group
+> - `SeBackupPrivilege`: user is in the Backup Operators group
+> - `AllowedToDelegate`: unconstrained delegation
 
-> [!NOTE]
-> Supported ACEs here: [supported](/doc/supported.md)
+</details>
+
+<img alt="graph" src="/griffonad/assets/graph.png?raw=true" width="500">
+
 
 Step 3: Search paths
 --------------------
@@ -123,8 +141,9 @@ From owned users, it reads the text file `owned`.
 > - `SAMACCOUNTNAME` : insensitive case, a computer ends with a `$`
 > - `TYPE` = `password` | `aes` | `nt`
 >
-> A password for a computer MUST BE set in hex. The separator can be changed with the
-> option `--sep` (you can put a string with more than one character).
+> A password for a computer MUST BE set in hex (it will be then converted to an aesKey).
+> The separator can be changed with the option `--sep` (you can put a string with more
+> than one character).
 
     # Warning: if you put multiple secrets for one user, only the last one will be kept!
     cat owned
@@ -135,8 +154,6 @@ From owned users, it reads the text file `owned`.
     Tracy:password:Spring2025
 
     griffon lab/json/* --fromo
-
-![fromo](/griffonad/assets/fromo.png?raw=true)
 
 Other options:
 
@@ -150,10 +167,25 @@ scenarios for the current target. For example: with a GenericAll on a user, you 
 reset the password, add a shadow key credential... If this option is unset, it will
 take the first scenario (in config.ml it's ForceChangePassword). With this option,
 you will see all scenarios but without continuing the path on the new owned target.
+- `--to`: display paths to the object.
 
-> [!TIP]
-> About the output:
->
+
+Example with `--to`:
+
+    griffon lab/json/* --to CORP.LOCAL
+
+    ...
+    ★PREPROD_USER —> ★PREPROD$ —> ★DATABASE$ —> ♦CORP.LOCAL
+    ★DEXY —> ★SVC$ —> ★PROD$ —> ★DATABASE$ —> ♦CORP.LOCAL
+    ★KELLY —> ★MAINTENERS —> ★SVC$ —> ★PROD$ —> ★DATABASE$ —> ♦CORP.LOCAL
+    ★SYS —> ★MAINTENERS —> ★SVC$ —> ★PROD$ —> ★DATABASE$ —> ♦CORP.LOCAL
+    ...
+
+
+<details>
+<summary>Path explanation</summary>
+
+> [!NOTE]
 > A path is a succession of action(s) to exploit one or many ACEs. The format is:
 > `OWNED -> [REQUIRED_TARGET]::ACTION[REQUIRED_OBJECT](TARGET):RESULT_OBJECT`
 >
@@ -164,29 +196,34 @@ you will see all scenarios but without continuing the path on the new owned targ
 > - `TARGET`: the object we wan't to own
 > - `RESULT_OBJECT`: it's often the same as `TARGET`, it means that now `TARGET` is owned
 
+</details>
+
+
 Step 4: Generate the script
 ---------------------------
 
-    griffon lab/json/* --fromo -s0 --dc-ip 10.0.0.2
+Use the line number to generate the script and run the commands!
 
-![script](/griffonad/assets/script.png?raw=true)
+    griffon lab/json/* --fromo -s0 --dc-ip 10.0.0.2
 
 
 Embedded tools
 ==============
 
 - `griffonad/tools/attr.py`: generic script to modify one ldap attribute
-- `griffonad/tools/addspn.py`: modify the attribute servicePrincipalName
-- `griffonad/tools/logonscript.py`: modify the attribute msTSInitialProgram
-- `griffonad/tools/addmember.py`: modify the attribute member
-- `griffonad/tools/toggleNP.py`: enable or disable the donotpreauth flag
-- `griffonad/tools/getbyname.py`: get all attributes of one object
-- `griffonad/tools/readpol.py`: export Registry.pol to json and rewrite the pol file 
-- `griffonad/tools/xmltask.py`: generate an xml for schedule task (mimic a real xml)
-- `griffonad/tools/scriptsini.py`: re-format a scripts.ini with correct encoding
-- `griffonad/tools/gpttmpl.py`: re-format a GptTmpl.inf with correct encoding
-- `griffonad/tools/readgmsa.py` (from gMSADumper.py): simplified and login parameters uniformization
+- `griffonad/tools/addGMSAReader.py`: add a user to read a GMSA password
 - `griffonad/tools/aesKrbKeyGen.py`: login parameters uniformization
+- `griffonad/tools/addmember.py`: modify the attribute member
+- `griffonad/tools/addspn.py`: modify the attribute servicePrincipalName
+- `griffonad/tools/getbyname.py`: get all attributes of one object
+- `griffonad/tools/gpttmpl.py`: re-format a GptTmpl.inf with correct encoding
+- `griffonad/tools/logonscript.py`: modify the attribute msTSInitialProgram
+- `griffonad/tools/readpol.py`: export Registry.pol to json and rewrite the pol file 
+- `griffonad/tools/readgmsa.py` (from gMSADumper.py): simplified and login parameters uniformization
+- `griffonad/tools/scriptsini.py`: re-format a scripts.ini with correct encoding
+- `griffonad/tools/toggleNP.py`: enable or disable the donotpreauth flag
+- `griffonad/tools/toggleDisable.py`: toggle the flag ACCOUNTDISABLE
+- `griffonad/tools/xmltask.py`: generate an xml for schedule task (mimic a real xml)
 
 
 Customization
@@ -194,6 +231,8 @@ Customization
 
 The file config.ml is fully customizable, you can set your preferences based on
 scenario priorities (more at [config.md](/doc/config.md)).
+
+[![asciicast](https://asciinema.org/a/860787.svg)](https://asciinema.org/a/860787)
 
 
 Tests

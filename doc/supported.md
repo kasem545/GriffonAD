@@ -27,6 +27,8 @@ Users:
 - CanRDP (Remote Desktop User, unchecked values in json for the attribute RemoteDesktopUsers)
 - CanPSRemote (Remote Management Users)
 - CanRDP + SeBackup from GPO
+- User activation
+- Add a new reader for GMSA passwords
 
 Computers:
 
@@ -54,8 +56,7 @@ Groups:
 - AddMember
 - AddSelf
 
-GPO, use the option `--opt allgpo` to see all of them (gpo applied only for
-admin users + computers in the same OU as the gpo link):
+GPO:
 
 - Immediate task
 - Startup/logon script

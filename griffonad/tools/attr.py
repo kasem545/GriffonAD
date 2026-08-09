@@ -33,7 +33,7 @@ def funcattr(args, key):
                     print(binascii.hexlify(v).decode())
                 else:
                     print(v)
-        except:
+        except (AttributeError, UnicodeDecodeError):
             val = attr[key]
             for v in attr[key]:
                 if args.hex:

@@ -52,20 +52,20 @@ GenericAll(any) -> GenericWrite
 # TODO: delegation parameter on a user (actually only on computer)
 AllowedToDelegate(many) -> ::AllowedToDelegateToAny require_targets ta_dc
 ::AllowedToDelegateToAny(dc) -> apply_with_ticket \
-    if not parent.sensitive and not parent.protected \
-    elsewarn "PARENT -> AllowedToDelegateToAny(TARGET): PARENT is sensitive or protected"
+        if not parent.sensitive and not parent.protected \
+        elsewarn "PARENT -> AllowedToDelegateToAny(TARGET): PARENT is sensitive or protected"
 
 # 'Account Operators'
 GenericAll(many) -> GenericAll \
-    require_targets ta_users_and_groups_without_admincount \
-    if ACCOUNT_OPERATORS in parent.groups
+        require_targets ta_users_and_groups_without_admincount \
+        if ACCOUNT_OPERATORS in parent.groups
 
 # 'Key Admins' or 'Enterprise Key Admins'
 AddKeyCredentialLink(many) -> ::AddKeyCredentialLink   \
-    require_targets ta_users_without_admincount \
-    if AllAddKeyCredentialLink and \
-        (KEY_ADMINS in parent.groups or ENTERPRISE_KEY_ADMINS in parent.groups) \
-    elsewarn "Set the flag AllAddKeyCredentialLink in config.ml to execute the scenario AddKeyCredentialLink(many)"
+        require_targets ta_users_without_admincount \
+        if AllAddKeyCredentialLink and \
+            (KEY_ADMINS in parent.groups or ENTERPRISE_KEY_ADMINS in parent.groups) \
+        elsewarn "Set the flag AllAddKeyCredentialLink in config.ml to execute the scenario AddKeyCredentialLink(many)"
 
 # PASSWD_NOTREQD: userAccountControl & 0x20
 ::BlankPassword(user) -> apply_with_blank_passwd
@@ -73,6 +73,10 @@ AddKeyCredentialLink(many) -> ::AddKeyCredentialLink   \
 
 ::CanRDP_RegSave(dc) -> apply_with_aes
 ::CanRDP_RegSave(computer) -> apply_with_aes
+
+# We don't call the CanRDP on each computers (with a require_targets) of the
+# OU or domain because the list would be too long!
+::CanRDP(any) -> stop
 
 # User
 
@@ -100,12 +104,12 @@ WriteDacl(user) -> ::DaclInitialProgram
 ::DaclServicePrincipalName(user) -> WriteSPN
 ::DaclInitialProgram(user) -> SetLogonScript
 ::ForceChangePassword(user) -> apply_with_forced_passwd \
-    if AllowChangePassword and not target.disabled
+        if AllowChangePassword and not target.disabled
 ::AddKeyCredentialLink(user) -> apply_with_ticket if not target.disabled
 ::Kerberoasting(user) -> apply_with_cracked_passwd \
-    require_for_auth any_owned \
-    if target.has_spn and not target.protected and not target.disabled \
-    elsewarn "warning: TARGET seems to be kerberoastable, but I need an owned user to request the TGS"
+        require_for_auth any_owned \
+        if target.has_spn and not target.protected and not target.disabled \
+        elsewarn "warning: TARGET seems to be kerberoastable, but I need an owned user to request the TGS"
 ::SetLogonScript(user) -> stop if not target.disabled
 ::WriteSPN(user) -> ::Kerberoasting if not target.disabled
 
@@ -117,6 +121,9 @@ SessionForUser(user) -> ::LSASS_dumper
 # DONT_REQ_PREAUTH: userAccountControl & 0x400000
 ::EnableNP(user) -> ::ASREPRoasting
 ::ASREPRoasting(user) -> apply_with_cracked_passwd if target.np
+
+ReadGMSAPassword(user) -> ::ReadGMSAPassword
+::ReadGMSAPassword(user) -> apply_with_aes
 
 # Computer
 AdminTo(computer) -> ::_Secretsdump
@@ -140,18 +147,17 @@ AddAllowedToAct(computer) -> ::RBCD
 ::RBCD(computer) -> ::U2U             require owned_user_without_spn
 ::U2U(computer) -> ::AllowedToAct if parent.is_user
 ::AllowedToAct(computer) -> ::_Secretsdump \
-    if not parent.sensitive and not parent.protected \
-    elsewarn "PARENT -> AllowedToAct(TARGET): PARENT is sensitive or protected"
+        if not parent.sensitive and not parent.protected \
+        elsewarn "PARENT -> AllowedToAct(TARGET): PARENT is sensitive or protected"
 
 # Constrained delegations (with/without protocol transition)
 # msDS-AllowedToDelegateTo contains a list of SPNs
 AllowedToDelegate(computer) -> __AllowedToDelegate_ok \
-    if not parent.sensitive and not parent.protected \
-    elsewarn "PARENT -> AllowedToDelegate(TARGET): PARENT is sensitive or protected"
+        if not parent.sensitive and not parent.protected \
+        elsewarn "PARENT -> AllowedToDelegate(TARGET): PARENT is sensitive or protected"
 
 # Constrained delegations with protocol transition
 # TRUSTED_TO_AUTH_FOR_DELEGATION: userAccountControl & 0x1000000
-__AllowedToDelegate_ok(computer) => ::SPNJacking        if parent.trustedtoauth
 __AllowedToDelegate_ok(computer) -> ::AllowedToDelegate if parent.trustedtoauth
 
 # else
@@ -169,13 +175,10 @@ __AllowedToDelegate_ok(computer) -> ::AllowedToDelegate if parent.trustedtoauth
 #
 # TODO: U2U?
 __AllowedToDelegate_ok(computer) -> ::SelfRBCD if not parent.trustedtoauth
-::SelfRBCD(computer) -> __NextSelfRBCD require_once unprotected_owned_with_spn_not_eq_parent
-::SelfRBCD(computer) -> __NextSelfRBCD require_once add_computer if AllowAddComputer
-__NextSelfRBCD(computer) => ::SPNJacking
-__NextSelfRBCD(computer) -> ::AllowedToDelegate
+::SelfRBCD(computer) -> ::AllowedToDelegate require_once unprotected_owned_with_spn_not_eq_parent
+::SelfRBCD(computer) -> ::AllowedToDelegate require_once add_computer if AllowAddComputer
 
 ::AllowedToDelegate(computer) -> ::_Secretsdump
-::SPNJacking(computer) -> ::AllowedToDelegate require_targets ta_spn_jacking_requirements
 
 WriteAccountRestrictions(computer) -> AddAllowedToAct
 AddKeyCredentialLink(computer) -> ::AddKeyCredentialLink

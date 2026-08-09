@@ -1,27 +1,12 @@
-# TODO: draw a better graph with cytoscape directly
-
 import griffonad
 import griffonad.lib.consts as c
 import dash
-from dash import Dash, html, dcc, callback, Input, Output
+from dash import Dash, html
 import dash_cytoscape as cyto
 
 # https://js.cytoscape.org/
 # https://icon-sets.iconify.design/
 # https://github.com/plotly/dash-cytoscape
-
-# TODO
-# - it would be nice with the navigator extension (https://codesandbox.io/p/sandbox/vanilla-h2cct?file=%2Fsrc%2Findex.js%3A115%2C24)
-#  -> is it possible to add a cytoscape extension?
-
-
-# Test to change dynamically the layout
-# @callback(Output('canvas', 'layout'), Input('dropdown-update-layout', 'value'))
-# def update_layout(layout):
-    # return {
-        # 'name': layout,
-        # 'animate': True
-    # }
 
 
 class Graph():
@@ -298,4 +283,4 @@ class Graph():
             )
         ])
 
-        app.run(debug=True)
+        app.run(debug=False)

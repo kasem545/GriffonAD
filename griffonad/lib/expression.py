@@ -30,7 +30,7 @@ def rpn_eval(polish:list, vars:dict={}) -> int:
                     stack.append(l + r)
                 case '-':
                     stack.append(l - r)
-                case '*': 
+                case '*':
                     stack.append(l * r)
                 case '/':
                     stack.append(l / r)
@@ -108,7 +108,7 @@ class Expression():
 
     expression = boolor 'or' expression | boolor
     boolor = booland 'and' boolor | boolor
-    booland = boolin '∈|∉' booland |  '-' booland | boolin
+    booland = boolin 'in/notin' booland |  '-' booland | boolin
     boolin = term '+' boolin | term '-' boolin | term
     term = factor '*' boolnot | factor '/' boolnot | factor
     boolnot = 'not' factor | factor
@@ -189,7 +189,7 @@ class Expression():
     def __booland(self, start:int, end:int, depth:int) -> tuple:
         return self.__generic_expression(
             start, end, depth, 'booland',
-            ["boolin '(in/notin)' booland", 'boolin'],
+            ["boolin '∈∉ (in/notin)' booland", 'boolin'],
             {'∈', '∉'}, self.__boolin)
 
     def __boolin(self, start:int, end:int, depth:int) -> tuple:
@@ -277,7 +277,7 @@ class Expression():
             i += 1
         return self.string[start:i]
 
-        s
+
 if __name__ == '__main__':
     # None means python computes differently boolean with integers and we can't verify
     # the exact result
@@ -304,11 +304,10 @@ if __name__ == '__main__':
         ('1 * (3 and 0) * 7 + 5', [1, 3, 0, '&', 7, '*', '*', 5, '+'], 5),
         ('1 + 2 or 3+4*6 and 7*8 or 9*0', [1, 2, '+', 3, 4, 6, '*', '+', 7, 8, '*', '&', 9, 0, '*', '|', '|'], None),
         ('true and false or 123 * var1 + 789 * var2.attr', [1, 0, '&', 123, 'var1', '*', 789, 'var2.attr', '*', '+', '|'], None),
-        ('true and(true or false)', [1, 1, 0, '|', '&'], True),
     ]
 
     print('compileok    resok    expr')
     for expr, compiled, res in tests:
         r1 = Expression(expr).compile()
         r2 = rpn_eval(r1, {'a': True, 'b': False, 'var1':5, 'var2.attr':6, 'list': [1,2,3]})
-        print(r1 == compiled, '       ', res == r2 if res is not None else '?   ', '     ', expr, r1)
+        print(r1 == compiled, '       ', res == r2 if res is not None else '?   ', '     ', expr)

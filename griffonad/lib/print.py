@@ -1,24 +1,21 @@
 import os
-import binascii
-import time
 import re
 import shutil
 import textwrap
 from colorama import Back, Fore, Style
-from jinja2 import Template, Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader
 
 Style.STRIKE = "\033[9m"
 
 import griffonad.lib.consts as c
-import griffonad.lib.actions
 import griffonad.config
 from griffonad.lib.actions import *
-from griffonad.lib.database import Owned, Database, LDAPObject
+from griffonad.lib.database import Database, LDAPObject
 from griffonad.lib.ml import MiniLanguage
 from griffonad.lib.utils import sanityze_symbol, password_to_nthash
 
 
-COMMENT_RE = re.compile(r'^(#.*)$', re.MULTILINE)
+COMMENT_RE = re.compile(r"^(#.*)$", re.MULTILINE)
 
 ACTION_DETECTIONS = {
     "::ForceChangePassword": {
@@ -46,6 +43,8 @@ ACTION_CLEANUP = {
 }
 
 # Well-known privileged RIDs and builtin SIDs to filter from ADCS noise.
+# These principals already have domain-level privilege — an ADCS finding for
+# them is expected and uninteresting from an attacker's perspective.
 PRIVILEGED_RIDS: set[int] = {
     500,  # Administrator
     502,  # krbtgt
@@ -73,6 +72,7 @@ def _is_privileged_principal(principal_sid: str) -> bool:
     """Return True if the SID belongs to a well-known privileged principal."""
     if principal_sid in PRIVILEGED_BUILTIN_SIDS:
         return True
+    # Check RID (last component of S-1-5-21-...-<RID>)
     parts = principal_sid.split("-")
     if len(parts) >= 2:
         try:
@@ -127,90 +127,58 @@ DACL_ABUSE_MATRIX = {
     },
 }
 
-RIGHT_SEVERITY = {
-    "GetChanges_GetChangesAll": "critical",
-    "GetChanges_GetChangesInFilteredSet": "critical",
-    "DCSync": "critical",
-    "GenericAll": "critical",
-    "WriteDacl": "critical",
-    "WriteOwner": "critical",
-    "Owns": "critical",
-    "AllExtendedRights": "high",
-    "AdminTo": "high",
-    "AddKeyCredentialLink": "high",
-    "AllowedToAct": "high",
-    "AllowedToDelegate": "high",
-    "WriteGPLink": "high",
-    "AddMember": "high",
-    "ForceChangePassword": "high",
-    "SeBackupPrivilege": "high",
-    "ReadLAPSPassword": "medium",
-    "ReadGMSAPassword": "medium",
-    "WriteSPN": "medium",
-    "WriteUserAccountControl": "medium",
-    "SetLogonScript": "medium",
-    "HasPrivSession": "high",
-    "HasSession": "medium",
-    "SessionForUser": "low",
-    "PrivSessionForUser": "medium",
-    "TrustedDomain": "low",
-    "TrustedDomainPivot": "medium",
-    "ADCS_ESC1": "high",
-    "ADCS_ESC2": "high",
-    "ADCS_ESC3": "high",
-    "ADCS_ESC4": "high",
-}
 
-
-def color1_object(o:LDAPObject, underline=False) -> str:
+def color1_object(o: LDAPObject, underline=False) -> str:
     if o is None:
-        return 'many'
+        return "many"
     if underline:
         u = Style.UNDERLINE
     elif o.type == c.T_USER and not o.enabled:
         u = Style.STRIKE
     else:
-        u = ''
-    sid = o.sid.replace(o.from_domain + '-', '')
+        u = ""
+    sid = o.sid.replace(o.from_domain + "-", "")
     if sid in c.BUILTIN_SID:
-        name = 'BUILTIN\\' + o.name.upper()
+        name = "BUILTIN\\" + o.name.upper()
     else:
         name = o.name.upper()
     if o.is_admin:
-        return f'{u}{Fore.RED}♦{name}{Style.RESET_ALL}'
+        return f"{u}{Fore.RED}♦{name}{Style.RESET_ALL}"
     if o.can_admin:
-        return f'{u}{Fore.YELLOW}★{name}{Style.RESET_ALL}'
-    return f'{u}{name}{Style.RESET_ALL}'
+        return f"{u}{Fore.YELLOW}★{name}{Style.RESET_ALL}"
+    return f"{u}{name}{Style.RESET_ALL}"
 
 
-# color in green if we are in the default case
-def color2_object(o:LDAPObject, underline=False) -> str:
+def color2_object(o: LDAPObject, underline=False) -> str:
     if o is None:
-        return 'many'
+        return "many"
     if underline:
         u = Style.UNDERLINE
     elif o.type == c.T_USER and not o.enabled:
         u = Style.STRIKE
     else:
-        u = ''
-    if o.sid in c.BUILTIN_SID:
-        name = 'BUILTIN\\' + name.upper()
+        u = ""
+    sid = o.sid.replace(o.from_domain + "-", "")
+    if sid in c.BUILTIN_SID:
+        name = "BUILTIN\\" + o.name.upper()
     else:
         name = o.name.upper()
     if o.is_admin:
-        return f'{u}{Fore.RED}♦{name}{Style.RESET_ALL}'
+        return f"{u}{Fore.RED}♦{name}{Style.RESET_ALL}"
     if o.can_admin:
-        return f'{u}{Fore.YELLOW}★{name}{Style.RESET_ALL}'
-    return f'{u}{Fore.GREEN}{name}{Style.RESET_ALL}'
+        return f"{u}{Fore.YELLOW}★{name}{Style.RESET_ALL}"
+    return f"{u}{Fore.GREEN}{name}{Style.RESET_ALL}"
+
 
 def set_attr(obj, name, value):
-    if name == 'secret':
+    if name == "secret":
         value = red(value)
     setattr(obj, name, value)
-    return ''
+    return ""
+
 
 def red(s):
-    return f'{Fore.RED}{s}{Style.RESET_ALL}'
+    return f"{Fore.RED}{s}{Style.RESET_ALL}"
 
 
 def _color_tag(text: str, color: str) -> str:
@@ -250,6 +218,41 @@ def _sev_label(sev: str) -> str:
     return _color_tag("LOW", Fore.CYAN)
 
 
+RIGHT_SEVERITY = {
+    "GetChanges_GetChangesAll": "critical",
+    "GetChanges_GetChangesInFilteredSet": "critical",
+    "DCSync": "critical",
+    "GenericAll": "critical",
+    "WriteDacl": "critical",
+    "WriteOwner": "critical",
+    "Owns": "critical",
+    "AllExtendedRights": "high",
+    "AdminTo": "high",
+    "AddKeyCredentialLink": "high",
+    "AllowedToAct": "high",
+    "AllowedToDelegate": "high",
+    "WriteGPLink": "high",
+    "AddMember": "high",
+    "ForceChangePassword": "high",
+    "SeBackupPrivilege": "high",
+    "ReadLAPSPassword": "medium",
+    "ReadGMSAPassword": "medium",
+    "WriteSPN": "medium",
+    "WriteUserAccountControl": "medium",
+    "SetLogonScript": "medium",
+    "HasPrivSession": "high",
+    "HasSession": "medium",
+    "SessionForUser": "low",
+    "PrivSessionForUser": "medium",
+    "TrustedDomain": "low",
+    "TrustedDomainPivot": "medium",
+    "ADCS_ESC1": "high",
+    "ADCS_ESC2": "high",
+    "ADCS_ESC3": "high",
+    "ADCS_ESC4": "high",
+}
+
+
 def color_right_name(name: str) -> str:
     sev = RIGHT_SEVERITY.get(name, "low")
     if sev == "critical":
@@ -264,6 +267,7 @@ def color_right_name(name: str) -> str:
 def color_action_name(name: str) -> str:
     if name.startswith("::"):
         base = name
+        sev = "medium"
         key = name[2:]
         if key.startswith("ADCS_ESC") or key in ["DCSync", "DaclFullControl"]:
             sev = "critical"
@@ -289,6 +293,475 @@ def color_action_name(name: str) -> str:
             return _color_tag(base, Fore.GREEN)
         return _color_tag(base, Fore.CYAN)
     return name
+
+
+tmpl_path = os.path.dirname(os.path.abspath(__file__)) + "/../templates"
+env = Environment(
+    loader=FileSystemLoader(tmpl_path),
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+env.filters["red"] = red
+
+
+# High value targets
+def print_hvt(args, db: Database):
+    print()
+    print(
+        f"{Fore.RED}♦{Style.RESET_ALL} admin | {Fore.YELLOW}★{Style.RESET_ALL} path-to-admin | {Style.UNDERLINE}owned{Style.RESET_ALL}"
+    )
+    print()
+    print("badges:")
+    print(
+        f"{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn't tell that the user is an admin, it could be an old admin)"
+    )
+    print(
+        f"{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)"
+    )
+    print(f"{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)")
+    print(f"{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group")
+    print(
+        f"{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)"
+    )
+    print(f"{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE")
+    print(
+        f"{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)"
+    )
+    print(f"{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD")
+    print()
+
+    def print_user(o):
+        owned = o.name.upper() in db.owned_db
+        print(color1_object(o, underline=owned), end="")
+
+        if o.admincount:
+            print(f"{Fore.GREEN} A{Style.RESET_ALL}", end="")
+        if o.spn and o.type != c.T_COMPUTER and o.name.upper() != "KRBTGT":
+            print(f"{Fore.GREEN} K{Style.RESET_ALL}", end="")
+        if o.np:
+            print(f"{Fore.GREEN} N{Style.RESET_ALL}", end="")
+        if o.protected:
+            print(f"{Fore.GREEN} P{Style.RESET_ALL}", end="")
+        if o.passwordnotreqd:
+            print(f"{Fore.GREEN} !R{Style.RESET_ALL}", end="")
+        if o.sensitive:
+            print(f"{Fore.GREEN} S{Style.RESET_ALL}", end="")
+        if o.trustedtoauth:
+            print(f"{Fore.GREEN} T{Style.RESET_ALL}", end="")
+        if o.pwdneverexpires:
+            print(f"{Fore.GREEN} !X{Style.RESET_ALL}", end="")
+
+        if args.sid:
+            print(f" {Fore.WHITE}{o.sid}{Style.RESET_ALL}", end="")
+
+        print()
+
+        if not o.can_admin and not o.is_admin:
+            for sid, rights in o.rights_by_sid.items():
+                if "RestrictedGroups" in rights:
+                    print(
+                        f"    {Fore.WHITE}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}"
+                    )
+                    break
+
+        for sid in o.group_sids:
+            if sid == "many":
+                name = "many"
+            elif sid not in db.objects_by_sid:
+                name = f"UNKNOWN_{sid}"
+            else:
+                name = color1_object(db.objects_by_sid[sid])
+            print(f"    < {name}")
+
+        for sid, rights in o.rights_by_sid.items():
+            if sid == "many":
+                target_name = "many"
+            elif sid not in db.objects_by_sid:
+                target_name = f"UNKNOWN_{sid}"
+            else:
+                target_name = color1_object(db.objects_by_sid[sid])
+            for r in rights.keys():
+                if rights[r] is not None:
+                    print(f"    {color_right_name(r)}({rights[r]} -> {target_name})")
+                else:
+                    print(f"    {color_right_name(r)}({target_name})")
+
+        print()
+
+    admins = []
+    pivots = []
+    others = []
+    for o in db.iter_users():
+        if args.select and not o.name.upper().startswith(args.select.upper()):
+            continue
+        if o.is_admin:
+            admins.append(o)
+        elif o.can_admin:
+            pivots.append(o)
+        else:
+            others.append(o)
+
+    if admins:
+        print(_color_tag(f"Admins ({len(admins)})", Fore.RED))
+        print()
+        for o in admins:
+            print_user(o)
+
+    if pivots:
+        print(_color_tag(f"\nPaths-to-admin ({len(pivots)})", Fore.YELLOW))
+        print()
+        for o in pivots:
+            print_user(o)
+
+    if others:
+        print(_color_tag(f"\nOther ({len(others)})", Fore.CYAN))
+        print()
+        for o in others:
+            print_user(o)
+
+    print()
+
+
+def print_ous(args, db: Database):
+    print()
+    names = []
+    for dn in db.ous_by_dn.keys():
+        ou = db.objects_by_sid[db.ous_dn_to_sid[dn]]
+        if not args.select or ou.name.upper().startswith(args.select.upper()):
+            names.append(ou.name.upper())
+    names.sort()
+
+    for name in names:
+        ou = db.objects_by_name[name]
+        data = db.ous_by_dn[ou.dn]
+
+        if not data["members"] and not data["gpo_links"]:
+            continue
+
+        print(ou.dn, end="")
+
+        if args.sid:
+            print(f" {Fore.WHITE}{ou.sid}{Style.RESET_ALL}", end="")
+
+        print()
+
+        if data["gpo_links"]:
+            for sid in data["gpo_links"]:
+                print("  <=>", color1_object(db.objects_by_sid[sid]))
+
+        if data["members"]:
+            print(f"    {len(data['members'])} members")
+            if args.members:
+                for sid in data["members"]:
+                    if sid not in db.objects_by_sid:
+                        name = f"UNKNOWN_{sid}"
+                    else:
+                        name = color1_object(db.objects_by_sid[sid])
+                    print("   ", name)
+
+        print()
+
+
+def print_groups(args, db: Database):
+    protected_group = f"{db.domain.sid}-525"
+    print()
+
+    names = []
+    for sid in db.groups_by_sid.keys():
+        g = db.objects_by_sid[sid]
+        if not args.select or g.name.upper().startswith(args.select.upper()):
+            names.append(g.name.upper())
+    names.sort()
+
+    printed = False
+
+    for name in names:
+        g = db.objects_by_name[name]
+        members = db.groups_by_sid[g.sid]
+
+        # always print the protected group
+        if g.sid != protected_group and not g.rights_by_sid:
+            continue
+
+        printed = True
+
+        sid = g.sid.replace(g.from_domain + "-", "")
+
+        print(f"{color1_object(g)}", end="")
+
+        if args.sid:
+            print(f" {Fore.WHITE}{g.sid}{Style.RESET_ALL}", end="")
+
+        print()
+
+        if members:
+            print(f"    {len(members)} members")
+            if args.members:
+                for m in members:
+                    print("   ", color1_object(db.objects_by_sid[m]))
+
+        for sid, rights in g.rights_by_sid.items():
+            if sid == "many":
+                name = "many"
+            elif sid not in db.objects_by_sid:
+                name = f"UNKNOWN_{sid}"
+            else:
+                name = color1_object(db.objects_by_sid[sid])
+            for i, r in enumerate(rights.keys()):
+                if rights[r] is not None:
+                    print(f"    ({color_right_name(r)}, {rights[r]} -> {name})")
+                else:
+                    print(f"    ({color_right_name(r)}, {name})")
+
+    if args.select and not printed:
+        print("This group may not have interesting rights")
+
+    print()
+
+
+def print_paths(args, db: Database, paths: list):
+    def score_path(path):
+        opsec = 0
+        blast = 0
+        for _, sym, target, _ in path:
+            if sym in ["::DCSync", "::DaclFullControl", "::ForceChangePassword"]:
+                opsec += 40
+                blast += 30
+            elif sym in ["::AddMember", "::WriteSPN", "::EnableNP", "::WriteGPLink"]:
+                opsec += 25
+                blast += 20
+            elif sym in [
+                "::AddKeyCredentialLink",
+                "::AllowedToAct",
+                "::AllowedToDelegate",
+            ]:
+                opsec += 15
+                blast += 15
+
+            if target is not None and getattr(target, "is_admin", False):
+                blast += 15
+
+        return opsec, blast
+
+    if paths:
+        if args.score_paths:
+            paths.sort(key=lambda p: score_path(p))
+        print()
+        found_path_to_admin = False
+        for i, p in enumerate(paths):
+            if not args.da or p[-1][2].is_admin and args.da:
+                print("%0.3x " % i, end="")
+            last_is_admin = p[-1][2] is not None and p[-1][2].is_admin
+            if last_is_admin:
+                print(f"{Fore.WHITE}{Back.RED}+{Style.RESET_ALL}", end=" ")
+            elif not args.da:
+                print("  ", end="")
+            if not args.da or last_is_admin and args.da:
+                if args.score_paths:
+                    opsec, blast = score_path(p)
+                    print(f"[opsec={opsec:03d} blast={blast:03d}] ", end="")
+                print_path(args, p)
+                print()
+    else:
+        print("[+] No paths found :(")
+
+
+def print_path(args, path: list):
+    length = len(path)
+    end = " —> "
+    i = 0
+
+    while i < length:
+        if i == length - 1:
+            end = ""
+
+        parent, symbol, target, required = path[i]
+
+        if parent is not None:
+            parent_name = color2_object(parent.obj)
+            print(f"{parent_name}", end=end)
+
+        # If the target changes multiple times before an apply or a stop, only the
+        # final target will be displayed
+
+        # Print all actions and requires until an apply or a stop
+        while True:
+            par, sym, tar, req = path[i]
+
+            if sym in c.TERMINALS:
+                break
+
+            if args.rights:
+                if sym[:2] not in ["__", "::"]:
+                    print(f"{color_right_name(sym)},", end="")
+            else:
+                if sym.startswith("::") and sym[2] != "_":
+                    print(f"{color_action_name(sym)}", end="")
+
+                if req is not None:
+                    print(f"[{req['class_name']}]", end="")
+
+            i += 1
+
+        target_name = color2_object(target)
+        print(f"({target_name}):", end="")
+
+        # don't print apply* and stop keywords
+        if sym in c.TERMINALS:
+            i += 1
+
+    parent, symbol, target, required = path[i - 1]
+    target_name = color2_object(target)
+    print(f"{target_name}")
+
+
+def render_template(filename, **kwargs):
+    template = env.get_template(filename)
+    out = template.render(**kwargs)
+    out = COMMENT_RE.sub(rf"{Fore.BLUE}\1{Style.RESET_ALL}", out)
+    print(out)
+    print()
+
+
+def print_script(args, db: Database, path: list):
+    glob = {
+        "fqdn": db.domain.name,
+        "fqdn_lower": db.domain.name.lower(),
+        "domain_short_name": db.domain.name.split(".")[0],
+        "dc_name": db.main_dc.name.replace("$", ""),
+        "dc_ip": args.dc_ip,
+        "domain_sid": db.domain.sid,
+        "spn": "random/spn",
+        "plain": "PLAIN_PASSWORD_HEX",
+        "connectback_ip": f"CONNECTBACK_IP",
+        "DEFAULT_PASSWORD": griffonad.config.DEFAULT_PASSWORD,
+        "T_SECRET_PASSWORD": c.T_SECRET_PASSWORD,
+        "T_SECRET_NTHASH": c.T_SECRET_NTHASH,
+        "T_SECRET_AESKEY": c.T_SECRET_AESKEY,
+        "T_COMPUTER": c.T_COMPUTER,
+        "T_USER": c.T_USER,
+        "T_DC": c.T_DC,
+        "T_MANY": c.T_MANY,
+        "T_OU": c.T_OU,
+        "T_DOMAIN": c.T_DOMAIN,
+        "T_CONTAINER": c.T_CONTAINER,
+        "T_GROUP": c.T_GROUP,
+        "T_GPO": c.T_GPO,
+        "password_to_nthash": password_to_nthash,
+        "set_attr": set_attr,
+    }
+    glob["mydomain"] = f"arbitrary.{glob['fqdn_lower']}"
+
+    print_comment(
+        [
+            "You may need to add these lines to your /etc/hosts:",
+            f"{glob['dc_ip']} {glob['dc_name']}.{glob['fqdn']}",
+            f"{glob['dc_ip']} {glob['dc_name']}",
+        ]
+    )
+
+    if glob["dc_ip"] == "DC_IP":
+        print_comment("Use the option --dc-ip to set DC_IP!")
+
+    last_target = None
+    last_parent = None
+
+    previous_action = ""
+
+    for parent, symbol, target, require in path:
+        if (
+            last_target is not None
+            and target is not None
+            and target.name != last_target.name
+        ):
+            print(f"{Fore.YELLOW}{last_target.name} is owned{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Next target is {target.name}{Style.RESET_ALL}")
+            print()
+
+        if (
+            target is not None
+            and last_target is not None
+            and last_target.sid != target.sid
+            and target.sid in db.users
+        ):
+            diff = time.time() - target.lastlogon
+            if target.lastlogon == -1:
+                print_warning(f"{target.name} never logged, is it a honey pot?\n")
+            elif diff > 60 * 60 * 24 * 30 * 6:
+                print_warning(
+                    f"{target.name} lastlogon > 6 months, is it a honey pot?\n"
+                )
+
+        if target is None:
+            last_target = None
+        else:
+            last_target = target
+
+        if parent is None:
+            last_parent = None
+        else:
+            if last_parent is not None and last_parent.krb_auth and not parent.krb_auth:
+                print_cmd("unset KRB5CCNAME\n")
+                last_parent.krb_auth = False
+            last_parent = parent
+
+        if parent is not None and not parent.krb_auth:
+            nopass = None
+            if parent.obj.protected:
+                print_comment(f"{parent.obj.name} is protected, switch to kerberos")
+                nopass = False
+            elif parent.secret_type == c.T_SECRET_PASSWORD and parent.secret == "":
+                print_comment(
+                    f"PASSWORD_NOTREQUIRED: the password may be blank, it's easier to get a TGT first"
+                )
+                nopass = True
+            if nopass is not None:
+                render_template(
+                    "_TGTRequest.jinja2",
+                    parent=parent,
+                    T_SECRET_PASSWORD=c.T_SECRET_PASSWORD,
+                    T_SECRET_AESKEY=c.T_SECRET_AESKEY,
+                    T_SECRET_NTHASH=c.T_SECRET_NTHASH,
+                    dc_ip=glob["dc_ip"],
+                    fqdn=glob["fqdn"],
+                    set_attr=set_attr,
+                    nopass=nopass,
+                )
+
+        if require is not None:
+            class_name = sanityze_symbol(require["class_name"])
+            griffonad.lib.require.__getattribute__(class_name).print(
+                glob, parent, require
+            )
+
+        if symbol.startswith("::"):
+            # Print commands, we will create a new owned object if we have a full control on it
+
+            v = {
+                "previous_action": previous_action,
+                "require": require,
+            }
+
+            if parent is not None:
+                v["parent"] = parent
+                v["parent_no_dollar"] = parent.obj.name.replace("$", "")
+                v["parent_ip"] = f"{parent.obj.name.replace('$', '')}_IP"
+
+            if target is not None:
+                v["target"] = target
+                v["target_no_dollar"] = target.name.replace("$", "")
+                v["target_ip"] = f"{target.name.replace('$', '')}_IP"
+
+            if parent is not None and target is not None:
+                if parent.krb_need_fqdn:
+                    v["target_no_dollar"] += f".{glob['fqdn']}"
+
+            v.update(glob)
+
+            s = sanityze_symbol(symbol)[2:]
+            render_template(f"{s}.jinja2", **v)
+
+        previous_action = symbol
 
 
 _CRED_KEYWORD_RE = re.compile(
@@ -324,471 +797,11 @@ def _highlight_creds(text: str) -> str:
     return text
 
 
-tmpl_path = os.path.dirname(os.path.abspath(__file__)) + '/../templates'
-env = Environment(
-    loader=FileSystemLoader(tmpl_path),
-    trim_blocks=True,
-    lstrip_blocks=True,
-)
-env.filters['red'] = red
-
-
-# High value targets
-def print_hvt(args, db:Database):
-    print()
-    print(
-        f"{Fore.RED}♦{Style.RESET_ALL} admin | {Fore.YELLOW}★{Style.RESET_ALL} path-to-admin | {Style.UNDERLINE}owned{Style.RESET_ALL}"
-    )
-    print()
-    print("badges:")
-    print(
-        f"{Fore.GREEN}A{Style.RESET_ALL}  admincount is set (this flag doesn't tell that the user is an admin, it could be an old admin)"
-    )
-    print(
-        f"{Fore.GREEN}K{Style.RESET_ALL}  the user may be Kerberoastable (at least one SPN is set)"
-    )
-    print(f"{Fore.GREEN}N{Style.RESET_ALL}  DONT_REQUIRE_PREAUTH (ASREPRoastable)")
-    print(f"{Fore.GREEN}P{Style.RESET_ALL}  the user is in the Protected group")
-    print(
-        f"{Fore.GREEN}!R{Style.RESET_ALL} PASSWORD_NOTREQUIRED (it means the password can be empty)"
-    )
-    print(f"{Fore.GREEN}S{Style.RESET_ALL}  SENSITIVE")
-    print(
-        f"{Fore.GREEN}T{Style.RESET_ALL}  TRUSTED_TO_AUTH_FOR_DELEGATION (it means you can impersonate to admin in constrained delegations)"
-    )
-    print(f"{Fore.GREEN}!X{Style.RESET_ALL} DONT_EXPIRE_PASSWORD")
-    print()
-
-    def print_user(o):
-        owned = o.name.upper() in db.owned_db
-        print(color1_object(o, underline=owned), end='')
-
-        if o.admincount:
-            print(f'{Fore.GREEN} A{Style.RESET_ALL}', end='')
-        if o.spn and o.type != c.T_COMPUTER and o.name.upper() != 'KRBTGT':
-            print(f'{Fore.GREEN} K{Style.RESET_ALL}', end='')
-        if o.np:
-            print(f'{Fore.GREEN} N{Style.RESET_ALL}', end='')
-        if o.protected:
-            print(f'{Fore.GREEN} P{Style.RESET_ALL}', end='')
-        if o.passwordnotreqd:
-            print(f'{Fore.GREEN} !R{Style.RESET_ALL}', end='')
-        if o.sensitive:
-            print(f'{Fore.GREEN} S{Style.RESET_ALL}', end='')
-        if o.trustedtoauth:
-            print(f'{Fore.GREEN} T{Style.RESET_ALL}', end='')
-        if o.pwdneverexpires:
-            print(f'{Fore.GREEN} !X{Style.RESET_ALL}', end='')
-
-        if args.sid:
-            print(f' {Fore.WHITE}{o.sid}{Style.RESET_ALL}', end='')
-
-        print()
-
-        if not o.can_admin and not o.is_admin:
-            for sid, rights in o.rights_by_sid.items():
-                if 'RestrictedGroups' in rights:
-                    print(
-                        f'    {Fore.WHITE}note: RestrictedGroups not expanded for admin inference{Style.RESET_ALL}'
-                    )
-                    break
-
-        for sid in o.group_sids:
-            if sid == 'many':
-                name = 'many'
-            elif sid not in db.objects_by_sid:
-                name = f'UNKNOWN_{sid}'
-            else:
-                name = color1_object(db.objects_by_sid[sid])
-            print(f'    < {name}')
-
-        for sid, rights in o.rights_by_sid.items():
-            if sid == 'many':
-                target_name = 'many'
-            elif sid not in db.objects_by_sid:
-                target_name = f'UNKNOWN_{sid}'
-            else:
-                target_name = color1_object(db.objects_by_sid[sid])
-            for r in rights.keys():
-                if rights[r] is not None:
-                    print(f'    {color_right_name(r)}({rights[r]} -> {target_name})')
-                else:
-                    print(f'    {color_right_name(r)}({target_name})')
-
-        print()
-
-    admins = []
-    pivots = []
-    others = []
-    for o in db.iter_users():
-        if args.select and not o.name.upper().startswith(args.select.upper()):
-            continue
-        if o.is_admin:
-            admins.append(o)
-        elif o.can_admin:
-            pivots.append(o)
-        else:
-            others.append(o)
-
-    if admins:
-        print(_color_tag(f'Admins ({len(admins)})', Fore.RED))
-        print()
-        for o in admins:
-            print_user(o)
-
-    if pivots:
-        print(_color_tag(f'\nPaths-to-admin ({len(pivots)})', Fore.YELLOW))
-        print()
-        for o in pivots:
-            print_user(o)
-
-    if others:
-        print(_color_tag(f'\nOther ({len(others)})', Fore.CYAN))
-        print()
-        for o in others:
-            print_user(o)
-
-    print()
-
-
-def print_ous(args, db:Database):
-    print()
-    names = []
-    for dn in db.ous_by_dn.keys():
-        ou = db.objects_by_sid[db.ous_dn_to_sid[dn]]
-        if not args.select or ou.name.upper().startswith(args.select.upper()):
-            names.append(ou.name.upper())
-    names.sort()
-
-    for name in names:
-        ou = db.objects_by_name[name]
-        data = db.ous_by_dn[ou.dn]
-
-        if not data['members'] and not data['gpo_links']:
-            continue
-
-        print(ou.dn, end='')
-
-        if args.sid:
-            print(f' {Fore.WHITE}{ou.sid}{Style.RESET_ALL}', end='')
-
-        print()
-
-        if data['gpo_links']:
-            for sid in data['gpo_links']:
-                print('  <=>', color1_object(db.objects_by_sid[sid]))
-
-        if data['members']:
-            print(f'    {len(data["members"])} members')
-            if args.members:
-                for sid in data['members']:
-                    if sid not in db.objects_by_sid:
-                        name = f'UNKNOWN_{sid}'
-                    else:
-                        name = color1_object(db.objects_by_sid[sid])
-                    print('   ', name)
-
-        print()
-
-
-def print_groups(args, db:Database):
-    protected_group = f'{db.domain.sid}-525'
-    print()
-
-    names = []
-    for sid in db.groups_by_sid.keys():
-        g = db.objects_by_sid[sid]
-        if not args.select or g.name.upper().startswith(args.select.upper()):
-            names.append(g.name.upper())
-    names.sort()
-
-    printed = False
-
-    for name in names:
-        g = db.objects_by_name[name]
-        members = db.groups_by_sid[g.sid]
-
-        # always print the protected group
-        if g.sid != protected_group and not g.rights_by_sid:
-            continue
-
-        printed = True
-
-        sid = g.sid.replace(g.from_domain + '-', '')
-
-        print(f'{color1_object(g)}', end='')
-
-        if args.sid:
-            print(f' {Fore.WHITE}{g.sid}{Style.RESET_ALL}', end='')
-
-        print()
-
-        if members:
-            print(f'    {len(members)} members')
-            if args.members:
-                for m in members:
-                    print('   ', color1_object(db.objects_by_sid[m]))
-
-        for sid, rights in g.rights_by_sid.items():
-            if sid == 'many':
-                name = 'many'
-            elif sid not in db.objects_by_sid:
-                name = f'UNKNOWN_{sid}'
-            else:
-                name = color1_object(db.objects_by_sid[sid])
-            for i, r in enumerate(rights.keys()):
-                if rights[r] is not None:
-                    print(f'    ({color_right_name(r)}, {rights[r]} -> {name})')
-                else:
-                    print(f'    ({color_right_name(r)}, {name})')
-
-    if args.select and not printed:
-        print('This group may not have interesting rights')
-
-    print()
-
-
-def print_paths(args, db:Database, paths:list):
-    def score_path(path):
-        opsec = 0
-        blast = 0
-        for _, sym, target, _ in path:
-            if sym in ["::DCSync", "::DaclFullControl", "::ForceChangePassword"]:
-                opsec += 40
-                blast += 30
-            elif sym in ["::AddMember", "::WriteSPN", "::EnableNP", "::WriteGPLink"]:
-                opsec += 25
-                blast += 20
-            elif sym in [
-                "::AddKeyCredentialLink",
-                "::AllowedToAct",
-                "::AllowedToDelegate",
-            ]:
-                opsec += 15
-                blast += 15
-
-            if target is not None and getattr(target, "is_admin", False):
-                blast += 15
-
-        return opsec, blast
-
-    if paths:
-        if args.score_paths:
-            paths.sort(key=lambda p: score_path(p))
-        print()
-        found_path_to_admin = False
-        for i, p in enumerate(paths):
-            if not args.da or p[-1][2].is_admin and args.da:
-                print('%0.3x ' % i, end='')
-            last_is_admin = p[-1][2] is not None and p[-1][2].is_admin
-            if last_is_admin:
-                print(f'{Fore.WHITE}{Back.RED}+{Style.RESET_ALL}', end=' ')
-            elif not args.da:
-                print('  ', end='')
-            if not args.da or last_is_admin and args.da:
-                if args.score_paths:
-                    opsec, blast = score_path(p)
-                    print(f"[opsec={opsec:03d} blast={blast:03d}] ", end="")
-                print_path(args, p)
-                print()
-    else:
-        print('[+] No paths found :(')
-
-
-def print_path(args, path:list):
-    length = len(path)
-    end = ' —> '
-    i = 0
-
-    while i < length:
-        if i == length - 1:
-            end = ''
-
-        parent, symbol, target, required = path[i]
-
-        if parent is not None:
-            parent_name = color2_object(parent.obj)
-            print(f'{parent_name}', end=end)
-
-        # If the target changes multiple times before an apply or a stop, only the
-        # final target will be displayed
-
-        # Print all actions and requires until an apply or a stop
-        while True:
-            par, sym, tar, req = path[i]
-
-            if sym in c.TERMINALS:
-                break
-
-            if args.rights:
-                if sym[:2] not in ['__', '::']:
-                    print(f'{color_right_name(sym)},', end='')
-            else:
-                if sym.startswith('::') and sym[2] != '_':
-                    print(f'{color_action_name(sym)}', end='')
-
-                if req is not None:
-                    print(f"[{req['class_name']}]", end='')
-
-            i += 1
-
-
-        target_name = color2_object(target)
-        print(f'({target_name}):', end='')
-
-        # don't print apply* and stop keywords
-        if sym in c.TERMINALS:
-            i += 1
-
-    parent, symbol, target, required = path[i-1]
-    target_name = color2_object(target)
-    print(f'{target_name}')
-
-
-def render_template(filename, **kwargs):
-    template = env.get_template(filename)
-    out = template.render(**kwargs)
-    out = COMMENT_RE.sub(rf'{Fore.BLUE}\1{Style.RESET_ALL}', out)
-    print(out)
-    print()
-
-
-def print_script(args, db:Database, path:list):
-    glob = {
-        'fqdn': db.domain.name,
-        'fqdn_lower': db.domain.name.lower(),
-        'domain_short_name': db.domain.name.split('.')[0],
-        'dc_name': db.main_dc.name.replace('$', ''),
-        'dc_ip': args.dc_ip,
-        'domain_sid': db.domain.sid,
-        'spn': 'random/spn',
-        'plain': 'PLAIN_PASSWORD_HEX',
-        'connectback_ip': f'CONNECTBACK_IP',
-        'DEFAULT_PASSWORD': griffonad.config.DEFAULT_PASSWORD,
-        'T_SECRET_PASSWORD': c.T_SECRET_PASSWORD,
-        'T_SECRET_NTHASH': c.T_SECRET_NTHASH,
-        'T_SECRET_AESKEY': c.T_SECRET_AESKEY,
-        'T_COMPUTER': c.T_COMPUTER,
-        'T_USER': c.T_USER,
-        'T_DC': c.T_DC,
-        'T_MANY': c.T_MANY,
-        'T_OU': c.T_OU,
-        'T_DOMAIN': c.T_DOMAIN,
-        'T_CONTAINER': c.T_CONTAINER,
-        'T_GROUP': c.T_GROUP,
-        'T_GPO': c.T_GPO,
-        'password_to_nthash': password_to_nthash,
-        'set_attr': set_attr,
-    }
-    glob['mydomain'] = f'arbitrary.{glob["fqdn_lower"]}'
-
-    print_comment([
-        'You may need to add these lines to your /etc/hosts:',
-        f"{glob['dc_ip']} {glob['dc_name']}.{glob['fqdn']}",
-        f"{glob['dc_ip']} {glob['dc_name']}",
-    ])
-
-    if glob['dc_ip'] == 'DC_IP':
-        print_comment('Use the option --dc-ip to set DC_IP!')
-
-    last_target = None
-    last_parent = None
-
-    previous_action = ''
-    original_target = None
-
-    for parent, symbol, target, require in path:
-        if original_target is None:
-            original_target = target
-
-        if last_target is not None and target is not None and \
-                target.name != last_target.name:
-            print(f'{Fore.YELLOW}{last_target.name} is owned{Style.RESET_ALL}')
-            print(f'{Fore.YELLOW}Next target is {target.name}{Style.RESET_ALL}')
-            print()
-            if last_parent != parent:
-                original_target = target
-
-        if target is not None and last_target is not None and \
-                last_target.sid != target.sid and target.sid in db.users:
-            diff = time.time() - target.lastlogon
-            if target.lastlogon == -1:
-                print_warning(f'{target.name} never logged, is it a honey pot?\n')
-            elif diff > 60*60*24*30*6:
-                print_warning(f'{target.name} lastlogon > 6 months, is it a honey pot?\n')
-
-        if target is None:
-            last_target = None
-        else:
-            last_target = target
-
-        if parent is None:
-            last_parent = None
-        else:
-            if last_parent is not None and last_parent.krb_auth and not parent.krb_auth:
-                print_cmd('unset KRB5CCNAME\n')
-                last_parent.krb_auth = False
-            last_parent = parent
-
-        if parent is not None and not parent.krb_auth:
-            nopass = None
-            if parent.obj.protected:
-                print_comment(f'{parent.obj.name} is protected, switch to kerberos')
-                nopass = False
-            elif parent.secret_type == c.T_SECRET_PASSWORD and parent.secret == '':
-                print_comment(f'PASSWORD_NOTREQUIRED: the password may be blank, it\'s easier to get a TGT first')
-                nopass = True
-            if nopass is not None:
-                render_template('_TGTRequest.jinja2',
-                    parent=parent,
-                    T_SECRET_PASSWORD=c.T_SECRET_PASSWORD,
-                    T_SECRET_AESKEY=c.T_SECRET_AESKEY,
-                    T_SECRET_NTHASH=c.T_SECRET_NTHASH,
-                    dc_ip=glob['dc_ip'],
-                    fqdn=glob['fqdn'],
-                    set_attr=set_attr,
-                    nopass=nopass)
-
-        if require is not None:
-            class_name = sanityze_symbol(require['class_name'])
-            griffonad.lib.require.__getattribute__(class_name).print(glob, parent, require)
-
-        if symbol.startswith('::'):
-            # Print commands, we will create a new owned object if we have a full control on it
-
-            v = {
-                'previous_action': previous_action,
-                'require': require,
-                'original_target': original_target,
-            }
-
-            if parent is not None:
-                v['parent'] = parent
-                v['parent_no_dollar'] = parent.obj.name.replace('$', '')
-                v['parent_ip'] = f'{parent.obj.name.replace("$","")}_IP'
-
-            if target is not None:
-                v['target'] = target
-                v['target_no_dollar'] = target.name.replace('$', '')
-                v['target_ip'] = f'{target.name.replace("$","")}_IP'
-
-            if parent is not None and target is not None:
-                if parent.krb_need_fqdn:
-                    v['target_no_dollar'] += f".{glob['fqdn']}"
-
-            v.update(glob)
-
-            s = sanityze_symbol(symbol)[2:]
-            render_template(f'{s}.jinja2', **v)
-
-        previous_action = symbol
-
-
-def print_desc(db:Database):
+def print_desc(db: Database):
     for o in db.objects_by_sid.values():
         if o.description is not None and o.description.strip():
             if o.type not in [c.T_GPO, c.T_CONTAINER, c.T_OU]:
-                rid = int(o.sid.split('-')[-1])
+                rid = int(o.sid.split("-")[-1])
                 do_print = rid >= 1000
             else:
                 do_print = True
@@ -798,7 +811,7 @@ def print_desc(db:Database):
                     print(color2_object(o))
                 else:
                     print(color1_object(o))
-                print('   ', _highlight_creds(o.description))
+                print("   ", _highlight_creds(o.description))
 
 
 def print_trusts(args, db: Database):
@@ -1077,9 +1090,9 @@ def print_acls(args, db: Database):
                 sev = RIGHT_SEVERITY.get(right, "low")
                 arg = rights[right]
                 if arg is not None:
-                    entry = f"{color_right_name(right)}({arg}) -> {target_name}"
+                    entry = f"{color_right_name(right)}({arg}) → {target_name}"
                 else:
-                    entry = f"{color_right_name(right)} -> {target_name}"
+                    entry = f"{color_right_name(right)} → {target_name}"
                 rights_by_sev[sev].append(entry)
 
         for sev in ["critical", "high", "medium", "low"]:
@@ -1132,14 +1145,14 @@ def print_ace_inheritance(args, db: Database):
             right = ace.get("RightName")
             principal_type = ace.get("PrincipalType", "Unknown")
             print(
-                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)}, explicit, {principal_type})"
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)}, explicit, {principal_type})"
             )
             if principal.type == c.T_COMPUTER:
-                print(f"    Computer with explicit ACE (unusual)")
+                print(f"    ⚠️  Computer with explicit ACE (unusual)")
             elif target.type == c.T_DOMAIN:
-                print(f"    Explicit grant on domain object")
+                print(f"    ⚠️  Explicit grant on domain object")
             elif target.is_admin or target.can_admin:
-                print(f"    Explicit grant on admin/path-to-admin object")
+                print(f"    ⚠️  Explicit grant on admin/path-to-admin object")
         print()
     else:
         print("No suspicious explicit ACE grants found")
@@ -1155,7 +1168,7 @@ def print_ace_inheritance(args, db: Database):
             principal = db.objects_by_sid[principal_sid]
             right = ace.get("RightName")
             print(
-                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)}, inherited)"
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)}, inherited)"
             )
         print()
 
@@ -1195,12 +1208,12 @@ def print_rbcd_matrix(args, db: Database):
         print()
         for target, delegator in rbcd_targets:
             print(
-                f"{color1_object(target)} <- allows delegation from: {color1_object(delegator)}"
+                f"{color1_object(target)} ← allows delegation from: {color1_object(delegator)}"
             )
             if not delegator.is_admin and delegator.type == c.T_USER:
-                print(f"    Non-admin user can delegate (exploitable!)")
+                print(f"    ⚠️  Non-admin user can delegate (exploitable!)")
             elif delegator.type == c.T_COMPUTER and not delegator.is_admin:
-                print(f"    Non-admin computer can delegate")
+                print(f"    ⚠️  Non-admin computer can delegate")
         print()
     else:
         print("No RBCD configurations found")
@@ -1210,7 +1223,7 @@ def print_rbcd_matrix(args, db: Database):
         print(_color_tag("Computers with Constrained Delegation", Fore.CYAN))
         print()
         for source, target in rbcd_sources:
-            print(f"{color1_object(source)} -> can delegate to: {color1_object(target)}")
+            print(f"{color1_object(source)} → can delegate to: {color1_object(target)}")
         print()
 
 
@@ -1256,13 +1269,13 @@ def print_delegation_chains(args, db: Database):
             print(f"{i}. ", end="")
             for j, (source, target, chain_type) in enumerate(chain):
                 if j > 0:
-                    print(" -> ", end="")
+                    print(" → ", end="")
                 print(f"{color1_object(source)}", end="")
                 if target:
                     print(f" ({chain_type})", end="")
             print()
             if chain[-1][2] == "unconstrained-to-DA":
-                print(f"    Ends at unconstrained delegation (high risk)")
+                print(f"    ⚠️  Ends at unconstrained delegation (high risk)")
             print()
     else:
         print("No delegation chains to admin found")
@@ -1304,10 +1317,10 @@ def print_principal_types(args, db: Database):
         for principal, target, ace in computer_aces[:30]:
             right = ace.get("RightName")
             print(
-                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)})"
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)})"
             )
             print(
-                f"    Computers rarely need ACL rights - possible misconfiguration"
+                f"    ⚠️  Computers rarely need ACL rights - possible misconfiguration"
             )
         print()
     else:
@@ -1320,7 +1333,7 @@ def print_principal_types(args, db: Database):
         for principal, target, ace in user_aces[:20]:
             right = ace.get("RightName")
             print(
-                f"{color1_object(principal)} -> {color1_object(target)} ({color_right_name(right)})"
+                f"{color1_object(principal)} → {color1_object(target)} ({color_right_name(right)})"
             )
         print()
 
@@ -1348,7 +1361,7 @@ def print_protected_analysis(args, db: Database):
         print(_color_tag(f"Protected Objects ({len(protected_objects)})", Fore.GREEN))
         print()
         for o in protected_objects[:20]:
-            print(f"  {color1_object(o)} (ACL inheritance disabled)")
+            print(f"✓ {color1_object(o)} (ACL inheritance disabled)")
         print()
     else:
         print("No ACL-protected objects found")
@@ -1362,22 +1375,17 @@ def print_protected_analysis(args, db: Database):
         )
         print()
         for o in unprotected_hvt[:20]:
-            print(f"  {color1_object(o)} (vulnerable to OU-level inheritance)")
+            print(f"⚠️  {color1_object(o)} (vulnerable to OU-level inheritance)")
         print()
     else:
         print("All high-value objects are ACL-protected")
         print()
 
 
-def print_parent_paths(db:Database, obj:LDAPObject):
+def print_parent_paths(db: Database, obj: LDAPObject):
     def __rec(sid, path):
         if sid not in db.parents:
-            l = []
-            for sid in path:
-                o = db.objects_by_sid[sid]
-                underline = o.name.upper() in db.owned_db
-                l.append(color1_object(o, underline=underline))
-            print(' —> '.join(l))
+            print(' —> '.join([color1_object(db.objects_by_sid[x]) for x in path]))
             return
         for par in db.parents[sid]:
             if par not in path:

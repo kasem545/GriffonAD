@@ -30,7 +30,7 @@ if __name__ == '__main__':
     if args.filename.endswith('.pol'):
         try:
             raw = open(args.filename, 'rb').read()
-        except:
+        except OSError:
             print(f'error: can\'t open {args.filename}')
             exit(0)
 
@@ -55,7 +55,7 @@ if __name__ == '__main__':
     else:
         try:
             pol = json.loads(open(args.filename, 'r').read())
-        except:
+        except (OSError, json.JSONDecodeError):
             print(f'error: can\'t open {args.filename}')
             exit(0)
 

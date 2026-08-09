@@ -98,9 +98,10 @@ class Sysvol():
                 return db.objects_by_name[sid]
             return None
 
-        # Create the right RestrictedGroups to all local members of the ou/domain
-        # Add users in a RestrictedGroup if this is set in the GptTmpl.inf
+        # Create the right RestrictedGroups to all local members
+        # -> members and memberof
 
+        # example: o has the right SeBackupPrivilege on ou_sid
         for gpo_dirname_id, groups in self.gpo_groups.items():
             if gpo_dirname_id not in db.objects_by_name:
                 print(f'warning: {gpo_dirname_id} not found /SKIP')
